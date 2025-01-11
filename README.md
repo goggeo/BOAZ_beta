@@ -297,7 +297,6 @@ At Defcon32, a presentation was delivered on how to detect the abuse of VEH usin
 ![image22](https://github.com/user-attachments/assets/a7769670-a8d8-482c-9066-fa3195ba0a60)
 ![image23](https://github.com/user-attachments/assets/b306bf7e-348a-4976-8f2b-487bbfe50c0e)
 
-
 **Figure: Exception path of exceptions**
 
   Taking all this into account, once VEH and VCH are set, VEH can perform benign activities and return EXCEPTION_CONTINUE_EXECUTION, handing control over to VCH to perform tasks such as decrypting shellcode and redirecting execution flow by modifying the stack register. This method evades detection by scanners or post-execution forensic tools that specifically search for IoCs within VEH. Furthermore, VCH can be used to set and unset hardware breakpoints and modify volatile registers after use.
@@ -313,6 +312,7 @@ At Defcon32, a presentation was delivered on how to detect the abuse of VEH usin
   Alternatively, after setting PAGE_NOACCESS on our shellcode, we can directly invoke it using any function, such as NtCreateThreadEx. This will trigger a STATUS_ACCESS_VIOLATION (0xC0000005) exception, which can be handled by VEH  VCH. The shellcode’s page permissions can then be changed back to PAGE_EXECUTE_READ once control flow reaches kernel32!BaseThreadInitThunk.
 
  ![image29](https://github.com/user-attachments/assets/a8cb9fed-2c9c-40a5-9075-a6dfd6b255d0)
+ 
 **Figure: Page Guard enumeration on Windows processes**
 
   In the following procedure, an exception handler combo enables code execution:
@@ -332,15 +332,18 @@ At Defcon32, a presentation was delivered on how to detect the abuse of VEH usin
 
 
 <img width="800" alt="image30" src="https://github.com/user-attachments/assets/c7037f31-ade6-496e-8ef8-1e87e693da71" />
+
 **Figure:VEH & VCH Scanner by NCC Group**
 
 
 
 <img width="1549" alt="image31" src="https://github.com/user-attachments/assets/ff50a59c-f5f9-4511-ac20-fc18052dc7fb" />
+
 **Figure:VEH & VCH detected in target process before execution**
 
 
 <img width="1529" alt="image32" src="https://github.com/user-attachments/assets/c66cf57f-8e02-4c54-ab67-074610583547" />
+
 **Figure:VEH & VCH manually removed inside VCH**
 
 Three Figures above illustrated that VEH and VCH can be detected by the exception handler scanner developed by NCC Group. However, after manually removing the CrossProcessFlag from the PEB and unlinking the handlers from the doubly linked handler lists inside the exception handler, the scanner can no longer detect VEH and VCH, even before shellcode execution. In fact, removing the CrossProcessFlag is sufficient to eliminate the presence of VEH without unlinking the handler lists. If an EDR or antivirus memory scanner searches for VEH at any time except between its manual insertion and before code execution, it will not detect VEH. Even if it does, no alert is raised, as VEH does not modify any registers. 
@@ -353,7 +356,8 @@ Additionally, a DLL Bomb technique can be used as follows:
 •	The VEH and VCH handlers can implement protection mechanisms, such as anti-debugging techniques and access authorisation checks. For instance, the VEH handler may verify that the e/rip register points to authorised memory by comparing it with a hard-coded pointer to an encrypted memory address. It can also check specific registers to validate argument values. 
 •	An attacker can execute the shellcode by setting a page guard at a decoy address and calling any API function that accesses that memory region. Common functions for triggering the page guard include NtCreateThreadEx or ReadProcessMemory. 
  
-![Uploading image33.png…]()
+
+<img width="512" alt="image33" src="https://github.com/user-attachments/assets/f86deb7b-3393-493c-ac0f-011064083d35" />
 
 
 Manually inserting handler lists generates modified code IoCs that are visible to tools like Moneta before shellcode execution. Detection logic can also be developed to detect writes to VEH and VCH handler lists in ntdll.dll at a fixed offset from the base address. Using RtlAddVectoredExceptionHandler and RtlCallVectoredHandlers, however, risks triggering antivirus or EDR hooks. Continuous monitoring of the CrossProcessFlag changes from the start of the process execution in the absence of RtlAddVectoredExceptionHandler could also be detected, although this is expensive and may be impractical.
