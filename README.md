@@ -293,7 +293,9 @@ At Defcon32, a presentation was delivered on how to detect the abuse of VEH usin
   In the second half of Figure below, both RtlAddVectoredContinueHandler and RtlAddVectoredExceptionHandler call the same function, RtlpAddVectoredHandler, with the r8 register containing 1 for VCH and 0 for VEH. 
  
 ![Picture 3](https://github.com/user-attachments/assets/a9c51f2c-a31c-4303-900c-a15f6cec8b6d)
+
 ![Picture 4](https://github.com/user-attachments/assets/0f49cc28-5cda-44cf-ae07-91d4c345c2c4)
+
 **Figure: Exception path of exceptions**
 
   Taking all this into account, once VEH and VCH are set, VEH can perform benign activities and return EXCEPTION_CONTINUE_EXECUTION, handing control over to VCH to perform tasks such as decrypting shellcode and redirecting execution flow by modifying the stack register. This method evades detection by scanners or post-execution forensic tools that specifically search for IoCs within VEH. Furthermore, VCH can be used to set and unset hardware breakpoints and modify volatile registers after use.
