@@ -293,6 +293,8 @@ At Defcon32, a presentation was delivered on how to detect the abuse of VEH usin
   In the second half of Figure below, both RtlAddVectoredContinueHandler and RtlAddVectoredExceptionHandler call the same function, RtlpAddVectoredHandler, with the r8 register containing 1 for VCH and 0 for VEH. 
  
 ![Picture 3](https://github.com/user-attachments/assets/a9c51f2c-a31c-4303-900c-a15f6cec8b6d)
+<img src="https://github.com/user-attachments/assets/a9c51f2c-a31c-4303-900c-a15f6cec8b6d" alt="Picture 3" width="500">
+
 
 ![Picture 4](https://github.com/user-attachments/assets/0f49cc28-5cda-44cf-ae07-91d4c345c2c4)
 
