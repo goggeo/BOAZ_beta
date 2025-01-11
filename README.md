@@ -331,13 +331,18 @@ At Defcon32, a presentation was delivered on how to detect the abuse of VEH usin
 
  
 <img width="240" alt="p-1" src="https://github.com/user-attachments/assets/21d0f432-987a-48e0-9451-b07b48c2f2db" />
+
 **Figure:VEH & VCH Scanner by NCC Group**
 
+
+
 <img width="240" alt="p-2" src="https://github.com/user-attachments/assets/5a7b5d08-4070-40ca-93f0-101fb965d5fa" />
+
 **Figure:VEH & VCH detected in target process before execution**
 
 
 <img width="240" alt="p-3" src="https://github.com/user-attachments/assets/6234b2e8-3ead-4135-979c-eef841599da0" />
+
 **Figure:VEH & VCH manually removed inside VCH**
 
 Three Figures above illustrated that VEH and VCH can be detected by the exception handler scanner developed by NCC Group. However, after manually removing the CrossProcessFlag from the PEB and unlinking the handlers from the doubly linked handler lists inside the exception handler, the scanner can no longer detect VEH and VCH, even before shellcode execution. In fact, removing the CrossProcessFlag is sufficient to eliminate the presence of VEH without unlinking the handler lists. If an EDR or antivirus memory scanner searches for VEH at any time except between its manual insertion and before code execution, it will not detect VEH. Even if it does, no alert is raised, as VEH does not modify any registers. 
@@ -363,9 +368,6 @@ Manually inserting handler lists generates modified code IoCs that are visible t
 
 ## A new threadless process injection primitive (Coming soon...)
 
-
-
-![Sifu_flow_with_background](https://github.com/user-attachments/assets/adaeb9b3-7c28-47fb-a590-096c9a125568)
 
 
 
