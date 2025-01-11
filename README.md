@@ -100,7 +100,7 @@ This tool has an alternative use: it can function as a packer or obfuscator.
     - **API name spoofing via IAT, using CallObfuscator by d35ha**
     - **Process code injection and execution mitigation policy (M1038) (e.g. CFG, XFG, module tampering prevention, Structured Exception Handler Overwrite Protection (SEHOP), etc)**
     - **Post-execution self-deletion: output binary can be marked as self-delete upon execution (T1070.004)**
-    - **New memory scanner evasion techniques:**
+    - **New antivirus scanner evasion techniques:**
       - Conventional VEH memory guard
       - PG (page guard) --> VEH (vectored exception handler)
       - PG --> VEH --> VCH (vectored continued handler) stealth guard
