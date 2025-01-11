@@ -316,19 +316,21 @@ At Defcon32, a presentation was delivered on how to detect the abuse of VEH usin
 **Figure: Page Guard enumeration on Windows processes**
 
   In the following procedure, an exception handler combo enables code execution:
-•	Set up a page guard on NtCreateThreadEx or any functions that can create a thread at a decoy address.
-•	Use RtlAddVectoredExceptionHandler and RtlAddVectoredContinueHandler to set up VEH and VCH handlers. Or manually insert the handler lists. 
-•	When STATUS_GUARD_PAGE_VIOLATION is handled within our custom VEH handler, we do some housekeeping and do not modify anything. Housekeeping includes anti-debugging techniques or confirm we are in the right thread by comparing thread ID.  
-•	When the control is passed to VCH custom handler, we set up hardware breakpoints on debug registers from Dr0 to Dr3 at ntdll!RtlUserThreadStart and or Kernel32!BaseThreadInitThunk, and then set up the local registers on Dr7, the control register. Alternatively, we can only set-up one debug register and in the next breakpoint set up the following ones. 
-•	We can apply encryption to real start address, and changing its memory protection to PAGE_NOACCESS before the first handler. Alternatively, when ntdll!RtlUserThreadStart has Rcx pointed to decoy start address. 
-•	In the last exception passed to VCH before BaseThreadInitThunk is proceeded to the last step, unset the debug registers, and VEH, VCH handlers by set he CrosssProceeFlag to 0x0. 
-•	At Kernel32!BaseThreadInitThunk and inside the VCH handler, we can apply decryption to the real start address, changing its memory protection to PAGE_EXECUTE_READ when Kernel32!BaseThreadInitThunk has Rdx pointing to the decoy start address. Then, change Rdx to the real start address and continue execution. 
-•	Return any NTSTATUS values we prefer to the calling function. 
-•	The relationship between VEH, SEH, UEH, and VCH in Windows Exception Handling when an exception is handled by the user: PG → VEH → SEH → UEH → VCH. 
-•	Hardware debug registers can be set within any of the handlers we choose, whether VEH or VCH. This makes the technique so flexible that detections looking for changes to registers within the exception thread context in VEH may not identify any IoCs, as all the changes have been made inside VCH following VEH.
-•	This technique does not use NtGetContextThread or NtSetThreadContext, thus avoiding detection on those two functions. 
-•	To ensure continuous execution, our shellcode have to end with return value of EXECEPTION_CONTINUE_SEARCH. 
-•	We can either remove our handler within our exception handler or within our executed shellcode to clean up the traces. This will clean up the TEB PEB CrossProcessFlag for 0x4 and 0x8 bits. 
+
+- Set up a page guard on `NtCreateThreadEx` or any functions that can create a thread at a decoy address.
+- Use `RtlAddVectoredExceptionHandler` and `RtlAddVectoredContinueHandler` to set up VEH and VCH handlers. Or manually insert the handler lists.
+- When `STATUS_GUARD_PAGE_VIOLATION` is handled within our custom VEH handler, we do some housekeeping and do not modify anything. Housekeeping includes anti-debugging techniques or confirming we are in the right thread by comparing thread ID.
+- When the control is passed to VCH custom handler, we set up hardware breakpoints on debug registers from `Dr0` to `Dr3` at `ntdll!RtlUserThreadStart` and/or `Kernel32!BaseThreadInitThunk`, and then set up the local registers on `Dr7`, the control register. Alternatively, we can only set up one debug register and in the next breakpoint set up the following ones.
+- We can apply encryption to the real start address, and change its memory protection to `PAGE_NOACCESS` before the first handler. Alternatively, when `ntdll!RtlUserThreadStart` has `Rcx` pointed to the decoy start address.
+- In the last exception passed to VCH before `BaseThreadInitThunk` is proceeded to the last step, unset the debug registers, and VEH, VCH handlers by setting the `CrossProcessFlag` to `0x0`.
+- At `Kernel32!BaseThreadInitThunk` and inside the VCH handler, we can apply decryption to the real start address, changing its memory protection to `PAGE_EXECUTE_READ` when `Kernel32!BaseThreadInitThunk` has `Rdx` pointing to the decoy start address. Then, change `Rdx` to the real start address and continue execution.
+- Return any NTSTATUS values we prefer to the calling function.
+- The relationship between VEH, SEH, UEH, and VCH in Windows Exception Handling when an exception is handled by the user: `PG → VEH → SEH → UEH → VCH`.
+- Hardware debug registers can be set within any of the handlers we choose, whether VEH or VCH. This makes the technique so flexible that detections looking for changes to registers within the exception thread context in VEH may not identify any IoCs, as all the changes have been made inside VCH following VEH.
+- This technique does not use `NtGetContextThread` or `NtSetThreadContext`, thus avoiding detection on those two functions.
+- To ensure continuous execution, our shellcode has to end with a return value of `EXCEPTION_CONTINUE_SEARCH`.
+- We can either remove our handler within our exception handler or within our executed shellcode to clean up the traces. This will clean up the `TEB → PEB → CrossProcessFlag` for `0x4` and `0x8` bits.
+
 
 
 <img width="800" alt="image30" src="https://github.com/user-attachments/assets/c7037f31-ade6-496e-8ef8-1e87e693da71" />
@@ -349,12 +351,14 @@ At Defcon32, a presentation was delivered on how to detect the abuse of VEH usin
 Three Figures above illustrated that VEH and VCH can be detected by the exception handler scanner developed by NCC Group. However, after manually removing the CrossProcessFlag from the PEB and unlinking the handlers from the doubly linked handler lists inside the exception handler, the scanner can no longer detect VEH and VCH, even before shellcode execution. In fact, removing the CrossProcessFlag is sufficient to eliminate the presence of VEH without unlinking the handler lists. If an EDR or antivirus memory scanner searches for VEH at any time except between its manual insertion and before code execution, it will not detect VEH. Even if it does, no alert is raised, as VEH does not modify any registers. 
 
 Additionally, a DLL Bomb technique can be used as follows:
-•	Generate source code with a DllMain function that contains a function to be called in the case of DLL_PROCESS_ATTACH. 
-•	Once the DLL is loaded into the target process, the function will register a VEH and VCH handler in the handler lists. 
-•	The function will then encrypt the shellcode region aligned with memory pages of 4096 bytes in the .text section and changes the memory pages to PAGE_NOACCESS. 
-•	The VEH and VCH handlers contain code that decrypts the shellcode, changes the .text section back to PAGE_EXECUTE_READ, and executes the code. At the end of VCH, the pages are re-encrypted and the handlers deregistered.
-•	The VEH and VCH handlers can implement protection mechanisms, such as anti-debugging techniques and access authorisation checks. For instance, the VEH handler may verify that the e/rip register points to authorised memory by comparing it with a hard-coded pointer to an encrypted memory address. It can also check specific registers to validate argument values. 
-•	An attacker can execute the shellcode by setting a page guard at a decoy address and calling any API function that accesses that memory region. Common functions for triggering the page guard include NtCreateThreadEx or ReadProcessMemory. 
+
+- Generate source code with a `DllMain` function that contains a function to be called in the case of `DLL_PROCESS_ATTACH`.
+- Once the DLL is loaded into the target process, the function will register a VEH and VCH handler in the handler lists.
+- The function will then encrypt the shellcode region aligned with memory pages of 4096 bytes in the `.text` section and change the memory pages to `PAGE_NOACCESS`.
+- The VEH and VCH handlers contain code that decrypts the shellcode, changes the `.text` section back to `PAGE_EXECUTE_READ`, and executes the code. At the end of VCH, the pages are re-encrypted, and the handlers deregistered.
+- The VEH and VCH handlers can implement protection mechanisms, such as anti-debugging techniques and access authorization checks. For instance, the VEH handler may verify that the `e/rip` register points to authorized memory by comparing it with a hard-coded pointer to an encrypted memory address. It can also check specific registers to validate argument values.
+- An attacker can execute the shellcode by setting a page guard at a decoy address and calling any API function that accesses that memory region. Common functions for triggering the page guard include `NtCreateThreadEx` or `ReadProcessMemory`.
+
  
 
 <img width="512" alt="image33" src="https://github.com/user-attachments/assets/f86deb7b-3393-493c-ac0f-011064083d35" />
