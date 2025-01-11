@@ -309,7 +309,7 @@ At Defcon32, a presentation was delivered on how to detect the abuse of VEH usin
 
   Page guards automatically unset themselves after being triggered and are extremely common in legitimate Windows processes. In Figure below, a small program enumerates all Windows processes and determines which ones have page guards enabled, as well as how many page guard regions each process contains. The results show that 198 processes have page guards set, with an average of 12.32 regions per process. Given this frequency, it is not feasible for EDRs to scan Windows processes for suspicious page guards regularly. Consequently, we can use the sequence: PG (Page Guard) → VEH → VCH, or PG → UEH (SetUnhandledExceptionFilter) → VCH, to achieve stealthy code execution or memory guard.
 
-  Alternatively, after setting PAGE_NOACCESS on our shellcode, we can directly invoke it using any function, such as NtCreateThreadEx. This will trigger a STATUS_ACCESS_VIOLATION (0xC0000005) exception, which can be handled by VEH  VCH. The shellcode’s page permissions can then be changed back to PAGE_EXECUTE_READ once control flow reaches kernel32!BaseThreadInitThunk.
+  Alternatively, after setting PAGE_NOACCESS on our shellcode, we can directly invoke it using any function, such as NtCreateThreadEx. This will trigger a STATUS_ACCESS_VIOLATION (0xC0000005) exception, which can be handled by VEH → VCH. The shellcode’s page permissions can then be changed back to PAGE_EXECUTE_READ once control flow reaches kernel32!BaseThreadInitThunk.
 
  ![image29](https://github.com/user-attachments/assets/a8cb9fed-2c9c-40a5-9075-a6dfd6b255d0)
  
