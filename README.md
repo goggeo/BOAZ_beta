@@ -367,7 +367,7 @@ Additionally, a DLL Bomb technique can be used as follows:
 Manually inserting handler lists generates modified code IoCs that are visible to tools like Moneta before shellcode execution. Detection logic can also be developed to detect writes to VEH and VCH handler lists in ntdll.dll at a fixed offset from the base address. Using RtlAddVectoredExceptionHandler and RtlCallVectoredHandlers, however, risks triggering antivirus or EDR hooks. Continuous monitoring of the CrossProcessFlag changes from the start of the process execution in the absence of RtlAddVectoredExceptionHandler could also be detected, although this is expensive and may be impractical.
   
 
-### x64 Calling Convention
+### x86-64 Calling Convention
 
 - First four arguments of a callee function: `Rcx`, `Rdx`, `R8`, and `R9`.
 - Additional arguments stored on the stack starting from `(Rsp + 0x28)`.
@@ -393,7 +393,6 @@ Boaz evasion wrapped Mimikatz.exe x64 release. The detection rate for wrapped Mi
 - **Loaders**: Implement more loader templates (process injection and code execution methods) with a divide and conquer option available.
 - **Rust**: Loader should be language agnostic. Rust loader would be a good choice. 
 - **COFF loaders**: Implement COFF loader suppport.
-- **RISC-V VM** Implement new loader using RISC-V VM concept. 
 - **Obfuscation**: Enhancing obfuscation methods and integrating new LLVM passes. 
 - **Shellcode Generation**: Expand to include more techniques, e.g., PIC generated from arbitrary command, and offer users the choice of shellcode generation technique.
 - **PIC Chain Reactions**: ....
