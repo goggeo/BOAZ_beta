@@ -401,6 +401,9 @@ int main(int argc, char *argv[]) {
 
 
 
+    //####END####
+    
+
     //// Execution part (can be replaced with any other execution method): 
 
     // 1. Creating a remote thread in the target process to execute the magiccode

@@ -441,6 +441,9 @@ int main(int argc, char *argv[]) {
 
 
 
+    //####END####
+
+
     // 1. Creating a remote thread in the target process to execute the magiccode
 	HANDLE hThread = CreateRemoteThread(pi.hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)trampolineEx, NULL, 0, NULL);
 

@@ -171,6 +171,9 @@ int main(int argc, char* argv[]) {
     }
 
 
+    //####END####
+
+
     if (!hw) {
         std::cerr << "[-] Failed to find list view. Error: " << GetLastError() << std::endl;
         return 1;

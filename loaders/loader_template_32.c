@@ -1223,6 +1223,10 @@ int main(int argc, char *argv[])
 		printf("[+] Magic code casted.\n");
 	}
 
+
+    //####END####
+    
+
     // Create a thread to execute at the DLL's entry point
     DWORD threadID;
     HANDLE hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)dllEntryPoint, NULL, 0, &threadID);

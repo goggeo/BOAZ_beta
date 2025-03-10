@@ -178,6 +178,11 @@ if (processSnapshot != INVALID_HANDLE_VALUE) {
     printf("[-] Failed to create snapshot of all threads in the system.\n");
 }
 
+
+//####END####
+
+
+
 if (selectedThread != NULL) {
     if (SuspendThread(selectedThread) != (DWORD)-1) {
         printf("[+] Suspended selected thread.\n");

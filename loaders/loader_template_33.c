@@ -262,6 +262,9 @@ int main(int argc, char* argv[]) {
 	// std::cout << "[+] NtProtectVirtualMemory result: " << status << std::endl;
 
 
+    //####END####
+
+	
 	getchar();
     HANDLE hThread;
 	NtCreateThreadEx_t pNtCreateThreadEx = (NtCreateThreadEx_t)PrprSyscl((char*)"NtCreateThreadEx");

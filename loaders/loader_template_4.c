@@ -77,6 +77,10 @@ int main(int argc, char *argv[]) {
         memcpy(hptr + (i * 16), bytes, 16);
     }
 
+
+    //####END####
+
+    
     // Hexdump of UUIDs for verification
     // printf("[*] Hexdump: ");
     // for (int i = 0; i < numUuids * 16; i++) {

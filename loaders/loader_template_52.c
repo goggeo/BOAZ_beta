@@ -1775,6 +1775,10 @@ int main(int argc, char *argv[])
         result = WriteProcessMemoryAPC(hProcess, (BYTE*)dllEntryPoint, (BYTE*)magiccode, magiccodeSize, bUseRtlCreateUserThread, bUseCreateThreadpoolWait); 
     }
 
+
+    //####END####
+
+
     // if (!VirtualProtectEx(hProcess, dllEntryPoint, magiccodeSize, oldProtect, &oldProtect)) {
     //     printf("[-] VirtualProtectEx failed to restore original memory protection. Error: %lu\n", GetLastError());
     // }

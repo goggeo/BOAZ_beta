@@ -22,6 +22,9 @@ int main(int argc, char *argv[])
 	
 	PTHREAD_START_ROUTINE apcRoutine = (PTHREAD_START_ROUTINE)magicAddress;
     QueueUserAPC((PAPCFUNC)apcRoutine, GetCurrentThread(), (ULONG_PTR)0);
+	
+	//####END####
+
 	testAlert();
 
 	return 0;

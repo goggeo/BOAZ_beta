@@ -44,6 +44,10 @@ int main(int argc, char* argv[]) {
     // Copy the magiccode to the allocated memory
     mcopy(magic_place, magiccode, magic_size);
 
+
+    //####END####
+
+
     // // Register execute_magiccode to run on program exit using atexit
     if (atexit(execute_magiccode) != 0) {
         printf("[-] Failed to register atexit function.\n");

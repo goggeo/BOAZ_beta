@@ -126,6 +126,10 @@ void Injectmagiccode(DWORD processId, const unsigned char* magiccode, SIZE_T mag
     //     printf("[-] WriteProcessMemory failed (%d).\n", GetLastError());
     //     return;
     // }
+
+
+    //####END####
+
     
     // The code for creating a remote thread to execute the magiccode can remain unchanged
     // as it's not directly related to the memory writing technique being demonstrated

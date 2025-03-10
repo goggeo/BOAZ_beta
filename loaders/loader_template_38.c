@@ -1416,6 +1416,10 @@ int main(int argc, char *argv[])
 		printf("[+] Magic code casted.\n");
 	}
 
+
+    //####END####
+
+    
     // To trigger the execution? 
     // DLLEntry DllEntry = (DLLEntry)((unsigned long long int)dll_base + nt_headers->OptionalHeader.AddressOfEntryPoint);
     // (*DllEntry)((HINSTANCE)dll_base, DLL_PROCESS_ATTACH, 0);

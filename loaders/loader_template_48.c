@@ -1695,6 +1695,9 @@ int main(int argc, char *argv[])
     dllEntryPoint1 = (PVOID)(entryPointRVA1 + (DWORD_PTR)fileBase);
     
 
+    //####END####
+    
+
     // PIMAGE_TLS_CALLBACK *callback_decoy;
     // PIMAGE_DATA_DIRECTORY tls_entry_decoy = &ntHeader1->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS];
 
