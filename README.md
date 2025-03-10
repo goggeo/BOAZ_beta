@@ -316,7 +316,9 @@ options:
 
 ## Threadless Code Execution Primitives and Memory Scanner Evasion
 
-Coming soon...
+
+White paper link: Coming soon...
+
 <img width="400" alt="Sifu" src="https://github.com/user-attachments/assets/935ee41b-02cd-46dc-8d29-2fd67d365b7f">
 
 
