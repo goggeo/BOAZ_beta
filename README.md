@@ -104,14 +104,21 @@ This tool has an alternative use: it can function as a packer or obfuscator.
         - The patchless method can avoid detection on patching instructions.
         - EtwEventWrite and EtwEventWriteFull are wrappers call NtTraceEvent, which is a syscall. We can set up a Vectored Exception Handler (VEH) and configure a hardware breakpoint (HWBP) using RtlCaptureContext to capture the thread's context, then use NtContinue to update it. Inside the VEH handler, when NtTraceEvent is called, we can redirect RIP to the Ret instruction after the Syscall instruction, which is six instructions after the function start address. we also set Rax = 0, thereby bypassing the ETW event completely.
     - **API name spoofing via IAT, using CallObfuscator by d35ha**
+    - **Parent PID Spoofing (T1134.004)**
     - **Process code injection and execution mitigation policy (M1038) (e.g. CFG, XFG, module tampering prevention, Structured Exception Handler Overwrite Protection (SEHOP), etc)**
     - **Post-execution self-deletion: output binary can be marked as self-delete upon execution (T1070.004)**
-    - **New antivirus scanner evasion techniques:**
+    - **Post-execution anti-forensic techniques: delete execution traces from various locations that do not require an admin privilege. For example:**
+        - Modify arbitrary reg key last write time with NtSetInformationKey.
+        - Delete AmCache and ShimCache
+        - Copy $STANDARD_INFORMATION timestamp and zone identifier.
+    - **New memory scanner evasion techniques:**
       - Conventional VEH memory guard
       - PG (page guard) --> VEH (vectored exception handler)
       - PG --> VEH --> VCH (vectored continued handler) stealth guard
       - Virtual table hooking execution guard
-  -  **A new code execution and process injection primitive via data corruption**
+  -  **A new code execution and process injection primitive**
+      - Threadless execution primitive 9S (Manual VEH to VCH execution)
+      - Threadless execution primitive 2B (Threadless virtual table pointer spoofing)
 
 
 ## Prerequisites
@@ -142,12 +149,12 @@ requirements.sh will install LLVM, which takes a while to complete. BOAZ can be 
 Example usage:
 
 ```console
-python3 Boaz.py -f ~/testing_payloads/notepad_64.exe -o ./alice_notepad.exe -t donut -obf -l 1 -c pluto -e uuid -g
+python3 Boaz.py -f ~/testing_payloads/notepad_64.exe -o ./alice_notepad.exe -t donut -obf -l 1 -c pluto -e uuid 
 ```
 
 Use a built ELF executable in Linux environment:
 ```console
-./Boaz -f ~/testing_payloads/notepad_64.exe -o ./alice_notepad.exe -t donut -obf -l 1 -c pluto -e uuid -g
+./Boaz -f ~/testing_payloads/notepad_64.exe -o ./alice_notepad.exe -t donut -obf -l 1 -c akira -e des -a 
 ```
 
 Refer to the help command for more details on usage:
@@ -161,11 +168,13 @@ python3 Boaz.py -h
 ```
 
 ```bash
-usage: Boaz [-h] -f INPUT_FILE [-o OUTPUT_FILE] [-divide] [-l LOADER] [-dll] [-cpl] [-sleep]
-            [-a] [-etw] [-j] [-dream [DREAM]] [-u] [-g] [-t {donut,pe2sh,rc4,amber,shoggoth}]
-            [-sd] [-sgn] [-e {uuid,xor,mac,ipv4,base45,base64,base58,aes,chacha,aes2,ascon}]
-            [-c {mingw,pluto,akira}] [-mllvm MLLVM] [-obf] [-obf_api] [-w [SYSWHISPER]]
-            [-entropy {1,2}] [-b [BINDER]] [-wm [WATERMARK]] [-s [SIGN_CERTIFICATE]]
+usage: Boaz.py [-h] -f INPUT_FILE [-o OUTPUT_FILE] [-divide] [-l LOADER] [-dll] [-cpl] [-sleep]
+               [-a] [-cfg] [-etw] [-j] [-dream [DREAM]] [-u] [-g]
+               [-t {donut,pe2sh,rc4,amber,shoggoth}] [-sd] [-sgn]
+               [-e {uuid,xor,mac,ipv4,base45,base64,base58,aes,des,chacha,rc4,aes2,ascon}]
+               [-c {mingw,pluto,akira}] [-mllvm MLLVM] [-obf] [-obf_api] [-w [SYSWHISPER]]
+               [-entropy {1,2}] [-b [BINDER]] [-wm [WATERMARK]] [-d] [-af] [-icon]
+               [-s [SIGN_CERTIFICATE]]
 
 Process loader and shellcode.
 
@@ -185,6 +194,8 @@ options:
                         control.exe
   -sleep                Obfuscation Sleep flag with random sleep time (True or False)
   -a, --anti-emulation  Anti-emulation flag (True or False)
+  -cfg, --control-flow-guard
+                        Disable Control Flow Guard (CFG) for the loader template.
   -etw                  Enable ETW patching functionality
   -j, --junk-api        Insert junk API function call at a random location in the main function
                         (5 API functions)
@@ -197,10 +208,10 @@ options:
                         shoggoth
   -sd, --star_dust      Enable Stardust PIC generator, input should be .bin
   -sgn, --encode-sgn    Encode the generated shellcode using sgn tool.
-  -e {uuid,xor,mac,ipv4,base45,base64,base58,aes,chacha,aes2,ascon}, --encoding {uuid,xor,mac,ipv4,base45,base64,base58,aes,chacha,aes2,ascon}
-                        Encoding type: uuid, xor, mac, ip4, base64, base58 AES and aes2. aes2 is
-                        a devide and conquer AES decryption to bypass logical path hijacking.
-                        Other encoders are under development.
+  -e {uuid,xor,mac,ipv4,base45,base64,base58,aes,des,chacha,rc4,aes2,ascon}, --encoding {uuid,xor,mac,ipv4,base45,base64,base58,aes,des,chacha,rc4,aes2,ascon}
+                        Encoding type: uuid, xor, mac, ip4, base45, base64, base58, AES, DES,
+                        chacha, RC4 and aes2. aes2 is a devide and conquer AES decryption to
+                        bypass logical path hijacking. Other encoders are under development.
   -c {mingw,pluto,akira}, --compiler {mingw,pluto,akira}
                         Compiler choice: mingw (default), pluto, or akira
   -mllvm MLLVM          LLVM passes for Pluto or Akira compiler
@@ -217,10 +228,76 @@ options:
                         not provided.
   -wm [WATERMARK], --watermark [WATERMARK]
                         Add watermark to the binary (0 for False, 1 or no value for True)
+  -d, --self-deletion   Enable self-deletion of the binary after execution
+  -af, --anti-forensic  Enable anti-forensic functions to clean the execution traces.
+  -icon                 Enable icon for the output binary.
   -s [SIGN_CERTIFICATE], --sign-certificate [SIGN_CERTIFICATE]
                         Optional: Sign the output binary and copy metadata from another binary
                         to your output. If a website or filepath is provided, use it. Defaults
                         to interactive mode if no argument is provided.
+
+    loader modules:
+    1.  Custom Stack syscalls with threadless execution (local injection)
+    2.  APC test alert
+    3.  Sifu syscall
+    4.  UUID manual injection
+    5.  Remote mockingJay
+    6.  Local thread hijacking 
+    7.  Function pointer invoke local injection
+    8.  Ninja_syscall2 
+    9.  RW local mockingJay
+    10. Ninja syscall 1
+    11. Sifu Divide and Conquer syscall
+    12. [Your custom loader here]
+    14. Exit the process without executing the injected shellcode
+    15. Syswhispers2 classic native API calls
+    16. Classic userland API calls (VirtualAllcEx --> WriteProcessMemory --> Cre-ateRemoteThread)
+    17. Sifu SysCall with Divide and Conquer
+    18. Classic userland API calls with WriteProcessMemoryAPC
+    19. DLL overloading 
+    20. Stealth new Injection (WriteProcessMemoryAPC + DLL overloading)
+    21.
+    22.
+    23.
+    24.
+    25.
+    26. Stealth new Injection (3 WriteProcessMemoryAPC variants + custom DLL overloading + custom dynamic API-hashing)
+    27. Stealth new Injection (3 Custom WriteProcessMemoryAPC variants + custom DLL overloading + custom dynamic API-hashing + Halo's gate patching)
+    28. Halo's gate patching syscall injection + Custom write code to Process Memory by either MAC or UUID convertor + invisible dynamic loading (no loadModuleHandle, loadLibrary, GetProcessAddress)
+    31. MAC address injection
+    32. Stealth new injection (Advanced)
+    33. Indirect Syscall + Halo gate + Custom Call Stack
+    37. Stealth new loader (Advanced, evade memory scan)
+    38. A novel PI with APC write method and phantom DLL overloading execution (CreateThread pointed to a memory address of UNMODIFIED DLL.)
+    39. Custom Stack PI (remote) with threadless execution
+    40. Custom Stack PI (remote) Threadless DLL Notification Execution
+    41. Custom Stack PI (remote) with Decoy code execution
+    48. Stealth new loader + Syscall breakpoints handler with memory guard AKA Sifu breakpoint handler (hook on NtResumeThread)
+    49. Stealth new loader + Syscall breakpoints handler with memory guard evasion AKA Sifu breakpoint handler (hook on NtCreateThreadEx, with Decoy address, PAGE_NOACCESS and XOR)
+    51. Stealth new loader + Syscall breakpoints handler with memory guard evasion AKA Sifu breakpoint handler (hook on ntdll!RtlUserThreadStart and kernel32!BaseThreadInitThunk, with Decoy address, PAGE_NOACCESS and XOR)
+    52. RoP gadgets as the trampoline code to execute the magic code. 
+    53.
+    54. Stealth new loader + Exception handler + Syscall breakpoints handler with memory guard evasion AKA Sifu breakpoint handler (hook on ntdll!RtlUserThreadStart and kernel32!BaseThreadInitThunk, with Decoy address, PAGE_NOACCESS and XOR)
+    56. This is a fork of Loader 37 with additional features. If -ldr flag is not provided, loader will add module (contains the shellcode) to the PEB module lists manually using code from Dark library. 
+    57. A fork of loader 51 with XOR replaced with RC4 encryption offered by SystemFunction032/033.
+    58. VEH add hanlder. Add ROP Trampoliine to the kernel32!BaseThreadInitThunk for additional complexity to analyse. 
+    59. SEH add hanlder. Add ROP Trampoliine to the kernel32!BaseThreadInitThunk for additional complexity to analyse.
+    60. Use Page guard to trigger first exception to set debug registers without using NtGetContextThread --> NtSetContextThread
+    61. Use Page guard to trigger first exception to set debug registers without using NtGetContextThread --> NtSetContextThread + Use VEH to set up breakpoints Dr0~Dr3, Dr7. Then use VCH to execute the code. So, no registers and stack pointer and instruction pointer changed in VEH. 
+    62. New loader in progress.
+    63. Remote version of custom module loading loader 37. Remote module injection.
+    64.
+    65. Advanced VMT hooking with custom module loader 37. 
+    66. A fork of L-65, with additional features such as optional PPID spoofing, multiple shellcode and DLL injection mitigation policies enabled on remote process.
+    67. A fork of L-65, with strange trampoline code to execute the magic code in both local and remote process. 
+    68. New loader in progress.
+    69. A fork of L-61, manually set VEH and VCH and clean ups by remove the CrossProcessFlags from TEB->PEB.
+    ...
+    73. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS.
+    74. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS. The VirtualProtect is being called within code cave.
+
+    75. Dotnet JIT threadless process injection. (coming soon)
+    76. Module List PEB Entrypoint threadless process injection.  (coming soon)
 
 ```
 
