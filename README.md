@@ -333,6 +333,7 @@ White paper link: Coming soon...
 Boaz evasion wrapped Mimikatz.exe x64 release. The detection rate for wrapped Mimikatz is zero on Jotti: 
 
 <img width="1197" alt="Screenshot 2024-02-28 at 14 46 17" src="https://github.com/user-attachments/assets/312fdffe-7024-4e21-8830-07bcea3004c9">
+
 **Figure: Jotti scan results of boaz_mimi**
 
 ![Screenshot 2025-03-09 at 21 22 36](https://github.com/user-attachments/assets/88d5d56a-c6cb-4cd4-ab7a-6347674c90a6)
