@@ -1,4 +1,4 @@
-<img width="423" alt="loglo" src="https://github.com/thomasxm/Boaz_beta/assets/44269971/a5427ccc-e2ed-4cc3-ab81-084de691b23f">
+![image](https://github.com/user-attachments/assets/cc32c6d6-c7d5-40da-abda-dbb3d62d77de)<img width="423" alt="loglo" src="https://github.com/thomasxm/Boaz_beta/assets/44269971/a5427ccc-e2ed-4cc3-ab81-084de691b23f">
 
 
 
@@ -24,14 +24,13 @@ Special thanks to Professor Rich Macfarlane [@rjmacfarlane](https://x.com/rjmacf
 
 ## Description
 
-BOAZ (Bypass, Obfuscate, Adapt, Zero-Trust) evasion was inspired by the concept of multi-layered approach which is the evasive version of defence-in-depth ([Swinnen & Mesbahi, 2014](https://www.blackhat.com/docs/us-14/materials/us-14-Mesbahi-One-Packer-To-Rule-Them-All.pdf)). It was developed to aid the security testing and antivirus defence evaluation. 
+BOAZ (Bypass, Obfuscate, Adapt, Zero-trace) evasion was inspired by the concept of multi-layered approach which is the evasive version of defence-in-depth first mentioned in “One packer to rule them all” at BH USA14 ([Swinnen & Mesbahi, 2014](https://www.blackhat.com/docs/us-14/materials/us-14-Mesbahi-One-Packer-To-Rule-Them-All.pdf)). BOAZ was developed to provide greater control over combinations of evasion methods, enabling more granular evaluations against antivirus and EDR [39]. 
 
-BOAZ aims to bypass the before and during execution phases that span signature, heuristic and behavioural-based detection methods. BOAZ supports x64 binary (PE) or raw playload (.bin) as input. It has been tested on separated Window-11 VMs with 14 Desktop AVs. The design of BOAZ evasion is modularised so users can add their own toolset, encoding or new techniques to the framework at will. It is written in both C and C++, and uses Python as the main program to link all modules together.
+BOAZ aims to bypass the before and during execution phases that span signature, heuristic and behavioural-based detection methods. BOAZ supports x64 binary (PE) or raw playload (.bin) as input. It has been tested on separated Window-11 Enterprise, Windows-10 and windows Server 2022 VMs (version: 22H2, 22621.1992) with 14 Desktop AVs and 7 EDRs installed include Windows Defender, Norton, BitDefender, Sophos and ESET. BOAZ’s modular design facilitates user customisation, enabling researchers to integrate their own toolsets or techniques. BOAZ is written in C++ and C and uses Python3 as the main linker to integrate all modules. 
 
 For students and researchers in offensive security, no advanced programming or scripting knowledge or skills are required to use BOAZ to generate undetectable polymorphic samples.
 
 This tool has an alternative use: it can function as a packer or obfuscator.
-
 
 
 
@@ -46,14 +45,17 @@ This tool has an alternative use: it can function as a packer or obfuscator.
         - Shikata Ga Nai (SGN) encoding.
     - **Payload encoding (T1132)**:
         - UUID (Universally Unique Identifier)
+        - XOR
         - MAC
         - IP4 format
         - base-64
         - base-45
         - base-58
         - Chacha20
+        - RC4 (SystemFunction32/33)
         - AES
         - AES with divide and conquer to bypass logical path hijacking
+        - DES (SystemFunction002)
     - **Compilation time obfuscation (LLVM, T1140, T1027)**:    
         - **Pluto**:
             - `bcf`: Bogus Control Flow
@@ -88,15 +90,19 @@ This tool has an alternative use: it can function as a packer or obfuscator.
     - **PIC convertor (T1027.009, T1027.002, T1620)**:
         - The donut (The Wover)
         - PE2SH (hasherezade)
-        - RC4 encrypted convertor
+        - RC4 custom encrypted converter
         - Amber (by Ege Balcı)
         - Shoggoth (by frkngksl)
+        - Stardust (by 5pider)
           
 - [ ] **Behavioral Evasion**: 
     - **Various code execution and process injection loaders (T1055, T1106, T1027.007)**: A variety of loaders for different evasion scenarios
     - **Two LLVM-obfuscation compilers (T1027)**
     - **Output DLL/CPL (side-loading) (T1574.002, T1218.011/002)**
-    - **ETW-patching (patch ETW stub with “xor rax, rax; ret”) (T1562.006)**
+    - **Event tracing for windows (ETW) patching (hot patch NtTraceEvent with “xor rax, rax; ret”) (T1562.006)**
+    - **Patchless ETW bypass:**
+        - The patchless method can avoid detection on patching instructions.
+        - EtwEventWrite and EtwEventWriteFull are wrappers call NtTraceEvent, which is a syscall. We can set up a Vectored Exception Handler (VEH) and configure a hardware breakpoint (HWBP) using RtlCaptureContext to capture the thread's context, then use NtContinue to update it. Inside the VEH handler, when NtTraceEvent is called, we can redirect RIP to the Ret instruction after the Syscall instruction, which is six instructions after the function start address. we also set Rax = 0, thereby bypassing the ETW event completely.
     - **API name spoofing via IAT, using CallObfuscator by d35ha**
     - **Process code injection and execution mitigation policy (M1038) (e.g. CFG, XFG, module tampering prevention, Structured Exception Handler Overwrite Protection (SEHOP), etc)**
     - **Post-execution self-deletion: output binary can be marked as self-delete upon execution (T1070.004)**
