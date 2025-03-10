@@ -251,8 +251,8 @@ options:
     12. [Your custom loader here]
     14. Exit the process without executing the injected shellcode
     15. Syswhispers2 classic native API calls
-    16. Classic userland API calls (VirtualAllcEx --> WriteProcessMemory --> Cre-ateRemoteThread)
-    17. Sifu SysCall with Divide and Conquer
+    16. Classic userland API calls (VirtualAllcEx --> WriteProcessMemory --> CreateRemoteThread)
+    17. Sifu Syscall with Divide and Conquer
     18. Classic userland API calls with WriteProcessMemoryAPC
     19. DLL overloading 
     20. Stealth new Injection (WriteProcessMemoryAPC + DLL overloading)
@@ -294,8 +294,7 @@ options:
     69. A fork of L-61, manually set VEH and VCH and clean ups by remove the CrossProcessFlags from TEB->PEB.
     ...
     73. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS.
-    74. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS. The VirtualProtect is being called within code cave.
-
+    74. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS. The VirtualProtect is being called within pretext.
     75. Dotnet JIT threadless process injection. (coming soon)
     76. Module List PEB Entrypoint threadless process injection.  (coming soon)
 
