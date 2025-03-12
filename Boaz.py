@@ -812,7 +812,7 @@ def run_obfuscation(loader_path):
         else:
             print(f"Expected patch file not found: {patch_file}. Obfuscation may have failed.")
     except subprocess.CalledProcessError as e:
-        print(f"Warning: Obfuscation step has some errors {e}. But do not worry, proceeding with the next steps.")
+        print(f"[*] Some Obfuscation steps have not completed with {e}. But do not worry, proceeding with the next steps.")
         # Since obf_file is now defined outside of the try block, it can be safely used here
         if os.path.exists(patch_file):
             os.rename(patch_file, obf_file)
