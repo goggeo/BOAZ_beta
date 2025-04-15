@@ -60,3 +60,25 @@ NtTestAlertCustom:
     mov rbx, rdx                ; backing up the struct as we are going to stomp rdx
     mov rax, [rbx]              ; INT_PTR pNtQueueApcThreadEx
     jmp rax
+
+
+global RtlUserThreadStartCustom
+
+RtlUserThreadStartCustom:
+    mov rbx, rdx                ; back up 
+    mov rax, [rbx]              ; RtlUserThreadStart
+    mov rcx, [rbx + 0x8]        ; PTHREAD_START_ROUTINE BaseAddress
+    mov rdx, [rbx + 0x10]       ; PVOID Context
+    jmp rax
+
+
+BaseThreadInitThunkCustom:
+
+    mov rbx, rdx                ; back up 
+    mov rax, [rbx]              ; BaseThreadInitThunk
+    mov rcx, [rbx + 0x8]        ; DWORD LdrReserved
+    mov rdx, [rbx + 0x10]       ; LPTHREAD_START_ROUTINE lpStartAddress
+    mov r8, [rbx + 0x18]        ; LPVOID lpParameter
+    jmp rax
+
+global BaseThreadInitThunkCustom

@@ -2177,6 +2177,7 @@ int main(int argc, char *argv[])
 
     // the magicode can be freed: 
     free(magiccode_nier);
+    magiccode_nier = NULL;
 
 
     //####END####

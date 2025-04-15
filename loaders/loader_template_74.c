@@ -2248,6 +2248,7 @@ int main(int argc, char *argv[])
 
     // the magicode can be freed: 
     free(magiccode_nier);
+    magiccode_nier = NULL;
 
     // printf("[DEBUG] dllEntryPoint: %p\n", dllEntryPoint);
     // printf("[DEBUG] baseAddress: %p\n", baseAddress);
