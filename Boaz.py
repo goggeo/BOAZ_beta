@@ -482,8 +482,8 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
             unsigned char magiccode[numUuids * 16];
             unsigned char* magiccodePtr = magiccode;
             convertUUIDsToMagicCode(UUIDs, magiccodePtr, numUuids);
-            printf("[+] MagicCodePtr size: %lu bytes\\n", sizeof(magiccodePtr));
-            printf("[+] size of magiccode: %lu bytes\\n", sizeof(magiccode));
+            printf("[+] MagicCodePtr size: %zu bytes\\n", sizeof(magiccodePtr));
+            printf("[+] size of magiccode: %zu bytes\\n", sizeof(magiccode));
             """
         elif encoding == 'xor':
             encoding_declaration_index = content.find('unsigned char XORed[]')
@@ -521,7 +521,6 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
         unsigned char* magiccodePtr = magiccode;
         if (CustomBase45ToBinary(base45, strlen(base45), magiccodePtr, &decodedSize)) {
             printf("Failed to decode base45 string\\n");
-            //free(magiccode); 
         }
         printf("[+] MagicCodePtr size: %lu bytes\\n", sizeof(magiccodePtr));
         printf("[+] size of magiccode: %lu bytes\\n", sizeof(magiccode));
@@ -546,7 +545,6 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
         unsigned char* magiccodePtr = magiccode;
         if (!CustomCryptStringToBinaryA(base58, strlen(base58), magiccodePtr, &decodedSize)) {
             printf("Failed to decode base58 string\\n");
-            free(magiccode);  
         }
         printf("[+] MagicCodePtr size: %lu bytes\\n", sizeof(magiccodePtr));
         printf("[+] size of magiccode: %lu bytes\\n", sizeof(magiccode));
