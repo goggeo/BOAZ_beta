@@ -840,7 +840,14 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
         except subprocess.CalledProcessError as e:
             print(f"[-] NASM assembly compilation failed: {e}")
             return  # Exit the function if NASM compilation fails
-    
+    if loader_number in [29, 30]:
+        asm_file = 'indirect_syscall.asm' if loader_number == 29 else 'direct_syscall.asm'
+        try:
+            subprocess.run(['nasm', '-f', 'win64', asm_file, '-o', 'assembly.o'], check=True)
+            print(f"[+] NASM compilation of '{asm_file}' successful.")
+        except subprocess.CalledProcessError as e:
+            print(f"[-] NASM compilation of '{asm_file}' failed: {e}")
+            return
     if not output_name:
         raise ValueError("output_name is empty. Please provide a valid output name.")
     
@@ -963,7 +970,7 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
     if loader_number == 33: 
         compile_command.append('./syscall.c')
         compile_command.append('assembly.o')
-    if loader_number in [1, 39, 40, 41, 66]:
+    if loader_number in [1, 29, 30, 39, 40, 41, 66]:
 
         compile_command.append('assembly.o')
         compile_command.append('-luuid')
@@ -1169,6 +1176,28 @@ def cleanup_files(*file_paths):
             print(f"File may not exists.")
 
 
+def compile_unhook_iat():
+    print("[*] Compiling check_hooks.exe...")
+    cmd = [
+        "x86_64-w64-mingw32-g++",
+        "-o", "./check_hooks.exe",
+        "./hook_detection/check_hooks.c",
+        "-static",
+        "-static-libgcc",
+        "-static-libstdc++",
+        "-ldbghelp",
+        "-ladvapi32"
+    ]
+    try:
+        subprocess.run(cmd, check=True)
+        print("[+] Compilation completed: ./check_hooks.exe")
+    except subprocess.CalledProcessError as e:
+        print(f"[!] Compilation failed: {e}")
+
+
+        
+
+
 def main():
 
     # ANSI escape code for cyan text (approximation of Cambridge blue)
@@ -1217,7 +1246,7 @@ def main():
     # Extended description for loaders
     loaders_description = """
     loader modules:
-    1.  Custom Stack syscalls with threadless execution (local injection)
+    1.  Proxy syscall --> Custom call Stack + indirect syscall with threadless execution (local injection)
     2.  APC test alert
     3.  Sifu syscall
     4.  UUID manual injection
@@ -1239,11 +1268,13 @@ def main():
     21.
     22. Advanced indirect custom call stack syscall, using VEH-->VCH logic and manually remove handlers from the list.
     23.
-    24.
+    24. Classic native API 
     25.
     26. Stealth new Injection (3 WriteProcessMemoryAPC variants + custom DLL overloading + custom dynamic API-hashing)
     27. Stealth new Injection (3 Custom WriteProcessMemoryAPC variants + custom DLL overloading + custom dynamic API-hashing + Halo's gate patching)
     28. Halo's gate patching syscall injection + Custom write code to Process Memory by either MAC or UUID convertor + invisible dynamic loading (no loadModuleHandle, loadLibrary, GetProcessAddress)
+    29. Classic indirect syscall
+    30. Classic direct syscall
     31. MAC address injection
     32. Stealth new injection (Advanced)
     33. Indirect Syscall + Halo gate + Custom Call Stack
@@ -1299,7 +1330,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter 
     )
 
-    parser.add_argument('-f', '--input-file', required=True, help='Path to binary.exe')
+    parser.add_argument('-f', '--input-file', required=False, help='Path to binary.exe')
     parser.add_argument('-o', '--output-file', help='Optional: Specify the output file path and name. If not provided, a random file name will be used in the ./output directory.')
 
     parser.add_argument('-divide', action='store_true', help='Divide flag (True or False)')
@@ -1364,6 +1395,13 @@ def main():
                         help='Optional: Sign the output binary and copy metadata from another binary to your output. If a website or filepath is provided, use it. Defaults to interactive mode if no argument is provided.')
 
 
+    parser.add_argument(
+        '-dh', '--detect-hooks',
+        action='store_true',
+        help='Compile a small tool called check_hook.exe for detecting inline/IAT/EAT hooks. This tool can detect both native API and export function hooks.'
+    )
+
+
     ### todo: consider add another post-compiled obfuscation from BH Europe 24 here: 
     # ./notpacked++ alice_notepad.exe --raw-size --fill-sections --rename-sections
     # Above, only those 3 options can be used, another option will corrupt the binary. 
@@ -1372,6 +1410,11 @@ def main():
 
 
     print_selected_options(args)
+
+
+    if args.detect_hooks:
+        compile_unhook_iat()
+        sys.exit()
 
     if args.input_file.endswith('.bin'):
         print("The input file ends with .bin")
@@ -1589,11 +1632,15 @@ def main():
 
 
 
+    
+
+
+
+
+
 
 if __name__ == '__main__':
     main()
-
-
 
 
 
