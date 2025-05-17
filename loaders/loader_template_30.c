@@ -1,7 +1,7 @@
 /**
 Editor: Thomas X Meng
 T1055 Process Injection
-Indirect syscall
+direct syscall
 Classic direct syscall
 
 _NtAllocateVirtualMemory_stub:
@@ -68,7 +68,7 @@ NtWriteVirtualMemory_t NtWriteVirtualMemory;
 NtCreateThreadEx_t NtCreateThreadEx;
 NtWaitForSingleObject_t pNtWaitForSingleObject;
 
-// --- Externs from NASM file: indirect_syscall.asm ---
+// --- Externs from NASM file: direct_syscall.asm ---
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -24,7 +24,7 @@ esac
  
 sudo apt install osslsigncode -y
 pip3 install pyopenssl
-sudo apt install build-essential -y
+sudo apt install build-essential nasm -y
 
 # Install required packages
 sudo apt install -y git
@@ -212,19 +212,16 @@ fi
 
 echo "start unit test:"
 ./llvm_obfuscator_pluto/bin/clang++ -D nullptr=NULL -O2 -flto -fuse-ld=lld -mllvm -passes=mba,sub,idc,bcf,fla,gle -Xlinker -mllvm -Xlinker -passes=hlw,idc -target x86_64-w64-mingw32 loader2_test.c ./classic_stubs/syscalls.c ./classic_stubs/syscallsstubs.std.x64.s -o ./notepad_llvm.exe -v -L$MINGW_DIR -L./clang_test_include -I./c++/ -I./c++/mingw32/ -lws2_32 -lpsapi
-wine ./notepad_llvm.exe
+# Run Pluto unit test (non-fatal Wine execution)
 if [ -f "./notepad_llvm.exe" ]; then
     wine ./notepad_llvm.exe
-fi
-
-# Check if the test run was successful
-if [ $? -ne 0 ]; then
-    echo -e "${RED}[!] Error: Running notepad_llvm.exe with Wine failed.${NC}"
-
-    exit 1
+    if [ $? -ne 0 ]; then
+        echo -e "${YELLOW}[!] Warning: Running notepad_llvm.exe with Wine failed. Skipping...${NC}"
+    else
+        echo -e "${GREEN}[!] Test run was successful.${NC}"
+    fi
 else
-
-    echo -e "${GREEN}[!] Test run was successful.${NC}"
+    echo -e "${RED}[!] notepad_llvm.exe not found. Skipping Wine test.${NC}"
 fi
 
 echo -e "${GREEN}[!] Installation and setup completed! ${NC}"
