@@ -168,26 +168,25 @@ python3 Boaz.py -h
 ```
 
 ```bash
-usage: Boaz.py [-h] -f INPUT_FILE [-o OUTPUT_FILE] [-divide] [-l LOADER] [-dll] [-cpl] [-sleep]
+usage: Boaz.py [-h] [-f INPUT_FILE] [-o OUTPUT_FILE] [-divide] [-l LOADER] [-dll] [-cpl] [-sleep]
                [-a] [-cfg] [-etw] [-j] [-dream [DREAM]] [-u] [-g]
                [-t {donut,pe2sh,rc4,amber,shoggoth}] [-sd] [-sgn]
                [-e {uuid,xor,mac,ipv4,base45,base64,base58,aes,des,chacha,rc4,aes2,ascon}]
                [-c {mingw,pluto,akira}] [-mllvm MLLVM] [-obf] [-obf_api] [-w [SYSWHISPER]]
                [-entropy {1,2}] [-b [BINDER]] [-wm [WATERMARK]] [-d] [-af] [-icon]
-               [-s [SIGN_CERTIFICATE]]
+               [-s [SIGN_CERTIFICATE]] [-dh]
 
 Process loader and shellcode.
 
 options:
   -h, --help            show this help message and exit
-  -f INPUT_FILE, --input-file INPUT_FILE
+  -f, --input-file INPUT_FILE
                         Path to binary.exe
-  -o OUTPUT_FILE, --output-file OUTPUT_FILE
-                        Optional: Specify the output file path and name. If not provided, a
-                        random file name will be used in the ./output directory.
+  -o, --output-file OUTPUT_FILE
+                        Optional: Specify the output file path and name. If not provided, a random
+                        file name will be used in the ./output directory.
   -divide               Divide flag (True or False)
-  -l LOADER, --loader LOADER
-                        Loader number (must be a non-negative integer)
+  -l, --loader LOADER   Loader number (must be a non-negative integer)
   -dll                  Compile the output as a DLL instead of an executable, can be run with
                         rundll32.exe
   -cpl                  Compile the output as a CPL instead of an executable, can be run with
@@ -197,47 +196,48 @@ options:
   -cfg, --control-flow-guard
                         Disable Control Flow Guard (CFG) for the loader template.
   -etw                  Enable ETW patching functionality
-  -j, --junk-api        Insert junk API function call at a random location in the main function
-                        (5 API functions)
-  -dream [DREAM]        Optional: Sleep with encrypted stacks for specified time in
-                        milliseconds. Defaults to 1500ms if not provided.
+  -j, --junk-api        Insert junk API function call at a random location in the main function (5
+                        API functions)
+  -dream [DREAM]        Optional: Sleep with encrypted stacks for specified time in milliseconds.
+                        Defaults to 1500ms if not provided.
   -u, --api-unhooking   Enable API unhooking functionality
   -g, --god-speed       Enable advanced unhooking technique Peruns Fart (God Speed)
-  -t {donut,pe2sh,rc4,amber,shoggoth}, --shellcode-type {donut,pe2sh,rc4,amber,shoggoth}
-                        Shellcode generation tool: donut (default), pe2sh, rc4, amber or
-                        shoggoth
+  -t, --shellcode-type {donut,pe2sh,rc4,amber,shoggoth}
+                        Shellcode generation tool: donut (default), pe2sh, rc4, amber or shoggoth
   -sd, --star_dust      Enable Stardust PIC generator, input should be .bin
   -sgn, --encode-sgn    Encode the generated shellcode using sgn tool.
-  -e {uuid,xor,mac,ipv4,base45,base64,base58,aes,des,chacha,rc4,aes2,ascon}, --encoding {uuid,xor,mac,ipv4,base45,base64,base58,aes,des,chacha,rc4,aes2,ascon}
+  -e, --encoding {uuid,xor,mac,ipv4,base45,base64,base58,aes,des,chacha,rc4,aes2,ascon}
                         Encoding type: uuid, xor, mac, ip4, base45, base64, base58, AES, DES,
                         chacha, RC4 and aes2. aes2 is a devide and conquer AES decryption to
                         bypass logical path hijacking. Other encoders are under development.
-  -c {mingw,pluto,akira}, --compiler {mingw,pluto,akira}
+  -c, --compiler {mingw,pluto,akira}
                         Compiler choice: mingw (default), pluto, or akira
   -mllvm MLLVM          LLVM passes for Pluto or Akira compiler
   -obf, --obfuscate     Enable obfuscation of codebase (source code)
   -obf_api, --obfuscate-api
                         Enable obfuscation of API calls in ntdll and kernel32.
-  -w [SYSWHISPER], --syswhisper [SYSWHISPER]
+  -w, --syswhisper [SYSWHISPER]
                         Optional: Use SysWhisper for direct syscalls. 1 for random syscall jumps
                         (default), 2 for compiling with MingW and NASM.
-  -entropy {1,2}        Entropy level for post-processing the output binary. 1 for null_byte.py,
-                        2 for pokemon.py
-  -b [BINDER], --binder [BINDER]
+  -entropy {1,2}        Entropy level for post-processing the output binary. 1 for null_byte.py, 2
+                        for pokemon.py
+  -b, --binder [BINDER]
                         Optional: Path to a utility for binding. Defaults to binder/calc.exe if
                         not provided.
-  -wm [WATERMARK], --watermark [WATERMARK]
+  -wm, --watermark [WATERMARK]
                         Add watermark to the binary (0 for False, 1 or no value for True)
   -d, --self-deletion   Enable self-deletion of the binary after execution
   -af, --anti-forensic  Enable anti-forensic functions to clean the execution traces.
   -icon                 Enable icon for the output binary.
-  -s [SIGN_CERTIFICATE], --sign-certificate [SIGN_CERTIFICATE]
-                        Optional: Sign the output binary and copy metadata from another binary
-                        to your output. If a website or filepath is provided, use it. Defaults
-                        to interactive mode if no argument is provided.
+  -s, --sign-certificate [SIGN_CERTIFICATE]
+                        Optional: Sign the output binary and copy metadata from another binary to
+                        your output. If a website or filepath is provided, use it. Defaults to
+                        interactive mode if no argument is provided.
+  -dh, --detect-hooks   Compile a small tool called check_hook.exe for detecting inline/IAT/EAT
+                        hooks. This tool can detect both native API and export function hooks.
 
     loader modules:
-    1.  Custom Stack syscalls with threadless execution (local injection)
+    1.  Proxy syscall --> Custom call Stack + indirect syscall with threadless execution (local injection)
     2.  APC test alert
     3.  Sifu syscall
     4.  UUID manual injection
@@ -252,21 +252,25 @@ options:
     14. Exit the process without executing the injected shellcode
     15. Syswhispers2 classic native API calls
     16. Classic userland API calls (VirtualAllcEx --> WriteProcessMemory --> CreateRemoteThread)
-    17. Sifu Syscall with Divide and Conquer
+    17. Sifu SysCall with Divide and Conquer
     18. Classic userland API calls with WriteProcessMemoryAPC
     19. DLL overloading 
     20. Stealth new Injection (WriteProcessMemoryAPC + DLL overloading)
     21.
-    22.
+    22. Advanced indirect custom call stack syscall, using VEH-->VCH logic and manually remove handlers from the list.
     23.
-    24.
+    24. Classic native API 
     25.
     26. Stealth new Injection (3 WriteProcessMemoryAPC variants + custom DLL overloading + custom dynamic API-hashing)
     27. Stealth new Injection (3 Custom WriteProcessMemoryAPC variants + custom DLL overloading + custom dynamic API-hashing + Halo's gate patching)
     28. Halo's gate patching syscall injection + Custom write code to Process Memory by either MAC or UUID convertor + invisible dynamic loading (no loadModuleHandle, loadLibrary, GetProcessAddress)
+    29. Classic indirect syscall
+    30. Classic direct syscall
     31. MAC address injection
     32. Stealth new injection (Advanced)
     33. Indirect Syscall + Halo gate + Custom Call Stack
+    34. EDR syscall no.1 + Halo gate + EDR Call Stack 1
+    36. EDR syscall no.2 + Halo gate + EDR Call Stack 2 
     37. Stealth new loader (Advanced, evade memory scan)
     38. A novel PI with APC write method and phantom DLL overloading execution (CreateThread pointed to a memory address of UNMODIFIED DLL.)
     39. Custom Stack PI (remote) with threadless execution
@@ -295,8 +299,11 @@ options:
     ...
     73. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS.
     74. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS. The VirtualProtect is being called within pretext.
-    75. Dotnet JIT threadless process injection. (coming soon)
-    76. Module List PEB Entrypoint threadless process injection.  (coming soon)
+
+    75. Dotnet JIT threadless process injection. 
+    76. Module List PEB Entrypoint threadless process injection. 
+    77. VT Pointer threadless process injection. Use RtlCreateHeap instead of BaseThreadInitThunk virtual table pointer.
+
 
 ```
 
