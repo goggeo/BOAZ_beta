@@ -1,10 +1,5 @@
-![image](https://github.com/user-attachments/assets/cc32c6d6-c7d5-40da-abda-dbb3d62d77de)<img width="423" alt="loglo" src="https://github.com/thomasxm/Boaz_beta/assets/44269971/a5427ccc-e2ed-4cc3-ab81-084de691b23f">
 
-
-
-
-
-<img width="352" alt="small_logo" src="https://github.com/thomasxm/Boaz_beta/assets/44269971/99abcf82-7084-47e5-a993-2a712b4ca664">
+![BOAZ_2](https://github.com/user-attachments/assets/980d13cd-3f9b-4c9a-b495-ce2403460e12)
 
 # BOAZ Evasion and Antivirus Testing Tool (for educational purpose)
 
