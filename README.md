@@ -1,6 +1,5 @@
 
-![boaz_3](https://github.com/user-attachments/assets/a8e397b6-9b5a-4730-a7b0-7f80ed4b4867)
-
+![output](https://github.com/user-attachments/assets/a7cb09fc-7ffb-4a0b-83d3-a047b309d761)
 
 # BOAZ Evasion and Antivirus Testing Tool (for educational purpose)
 
