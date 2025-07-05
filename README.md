@@ -119,7 +119,7 @@ This tool has an alternative use: it can function as a packer or obfuscator.
 ## Prerequisites
 
 - Linux environment with Wine configured. Kali Linux or other Debian prefered. 
-- CMake, Git, GCC, G++, MingW, LLVM and other build essentials installed.
+- CMake, Git, GCC, G++, MingW, LLVM, nasm and other build essentials installed.
 
 ## Installation
 
@@ -138,6 +138,66 @@ bash requirements.sh
 
 It should be noted that SGN encoder sometimes can generate bad characters, use with caution. 
 requirements.sh will install LLVM, which takes a while to complete. BOAZ can be run without the -llvm handle; however, it is not optimised without the latter.
+
+
+## Docker Setup & Installation
+
+BOAZ can also be used via Docker to avoid dependency and build issues.
+
+### 1. Install Docker
+
+If Docker is not already installed on your system:
+
+```bash
+sudo apt install docker-cli -y
+sudo apt install docker.io -y
+```
+
+### 2. Pull the BOAZ Docker image
+
+```bash
+sudo docker pull mmttxx20/boaz-builder:latest
+```
+
+### 3. Verify the image has been pulled
+
+```bash
+sudo docker images | grep -in "boaz"
+```
+
+### 4. Run a Bash shell inside the container
+
+```bash
+sudo docker run --rm -it \
+  --entrypoint /bin/bash \
+  -v "$HOME:/host_home" \
+  -v "$PWD:/boaz/output" \
+  --shm-size=1024M \
+  --name boaz_built \
+  mmttxx20/boaz-builder
+```
+
+- `/host_home` maps your home directory inside the container.
+- `-v "$PWD:/boaz/output"` mounts your current directory on the host to `/boaz/output` in the container.
+- To confirm the host home path: `echo $HOME`
+
+### 5. Run a test build with LLVM obfuscation and Notepad as input
+
+```bash
+python3 Boaz.py -h
+```
+
+```bash
+python3 Boaz.py -f /host_home/Boaz_beta/notepad.exe -o ./output/boaz_output.exe -t donut -l 16 -e uuid -c akira
+```
+
+- `-t donut`: Use Donut as the position independent shellcode generator.
+- `-l 16`: Use loader number 16.
+- `-e uuid`: Encode the shellcode using UUID scheme.
+- `-c akira`: Use Akira as the LLVM obfuscator and clang++ as the cross-compiler.
+
+After the process completes and you exit the container, the output binary `boaz_output.exe` will be present in your current working directory on the host.
+
 
 ## Usage
 
