@@ -18,6 +18,19 @@ import glob
 import sys
 import hashlib
 
+
+def in_docker():
+    """Detect if running inside a Docker container."""
+    return os.path.exists('/.dockerenv') or \
+           'docker' in open('/proc/1/cgroup', 'rt').read()
+
+def run_cmd(cmd_list, **kwargs):
+    """Run a command, stripping sudo if inside Docker."""
+    if in_docker() and cmd_list[0] == 'sudo':
+        cmd_list = cmd_list[1:]  # remove 'sudo'
+    return subprocess.run(cmd_list, **kwargs)
+
+
 def check_non_negative(value):
     ivalue = int(value)
     if ivalue < 0:
@@ -802,7 +815,8 @@ def run_obfuscation(loader_path):
     patch_file = loader_path + '.patch' 
 
     try:
-        subprocess.run(['sudo', 'bash', './obfuscate/obfuscate_file.sh', loader_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        run_cmd(['sudo', 'bash', './obfuscate/obfuscate_file.sh', loader_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         # subprocess.run(['sudo', 'bash', './obfuscate/obfuscate_file.sh', loader_path], check=True)
         # Check if the patch file exists and rename it to obf_file
         if os.path.exists(patch_file):
