@@ -22,6 +22,7 @@ case $yn in
 esac
 
  
+sudo apt install 
 sudo apt install osslsigncode -y
 pip3 install pyopenssl
 sudo apt install build-essential nasm -y
@@ -33,7 +34,6 @@ sudo apt install -y ninja-build
 sudo apt install -y python3
 sudo apt install -y gcc
 sudo apt install -y g++
-sudo apt install -y libz3-dev 
 sudo apt install -y zlib1g-dev
 sudo apt install -y wine
 sudo apt install -y mingw-w64
@@ -142,18 +142,39 @@ else
     echo -e "${RED}[!] Akira llvm-obfuscator is already installed.${NC}"
     
 fi
-# Locate the installed version of x86_64-w64-mingw32
-MINGW_DIR=$(ls -d /usr/lib/gcc/x86_64-w64-mingw32/*-win32 | sort -V | tail -n 1)
 
-if [ -z "$MINGW_DIR" ]; then
-  echo "Error: No x86_64-w64-mingw32 directory found."
+# Attempt to find posix version first
+GCCVER=$(ls /usr/lib/gcc/x86_64-w64-mingw32 2>/dev/null | grep posix | sort -V | tail -n 1)
+
+# If no posix version found, try win32
+if [ -z "$GCCVER" ]; then
+  echo "No posix version found. Trying win32..."
+  GCCVER=$(ls /usr/lib/gcc/x86_64-w64-mingw32 2>/dev/null | grep win32 | sort -V | tail -n 1)
+fi
+
+# If neither found, exit with error
+if [ -z "$GCCVER" ]; then
+  echo "Error: No usable MinGW GCC version found under /usr/lib/gcc/x86_64-w64-mingw32"
   exit 1
 fi
 
-echo "Using MinGW directory: $MINGW_DIR"
+echo "Using MinGW GCC version: $GCCVER"
 
-echo "start unit test:"
-./akira_built/bin/clang++ -D nullptr=NULL -mllvm -irobf-indbr -mllvm -irobf-icall -mllvm -irobf-indgv -mllvm -irobf-cse -mllvm -irobf-cff -target x86_64-w64-mingw32 loader2_test.c classic_stubs/syscalls.c ./classic_stubs/syscallsstubs.std.x64.s -o test.exe -v -L$MINGW_DIR -L./clang_test_include -I./c++/ -I./c++/mingw32/ -lws2_32 -lpsapi 
+# Use in compilation
+echo "start Akira unit test:"
+./akira_built/bin/clang++ \
+  -D nullptr=NULL \
+  -mllvm -irobf-indbr -mllvm -irobf-icall -mllvm -irobf-indgv -mllvm -irobf-cse -mllvm -irobf-cff \
+  -target x86_64-w64-windows-gnu \
+  loader2_test.c classic_stubs/syscalls.c ./classic_stubs/syscallsstubs.std.x64.s \
+  -o test.exe -v \
+  -L/usr/lib/gcc/x86_64-w64-mingw32/$GCCVER \
+  -L/usr/x86_64-w64-mingw32/lib \
+  -L/usr/x86_64-w64-mingw32/mingw/lib \
+  -I./c++/ -I./c++/mingw32/ \
+  -lstdc++ -lgcc_s -lgcc \
+  -lws2_32 -lpsapi -lmingw32 -lmoldname -lmingwex -lmsvcrt -ladvapi32 -lshell32 -luser32 -lkernel32
+
 ## if ./test.exe exists, run it with wine
 # Check if the build was successful
 if [ $? -ne 0 ]; then
@@ -176,42 +197,39 @@ else
 fi
 
 
-#!/bin/bash
 if [ ! -d "llvm_obfuscator_pluto" ]; then
 # Clone and build Pluto
     echo "Cloning and building Pluto-obfuscator..."
     git clone https://github.com/thomasxm/Pluto.git
     cd Pluto && mkdir -p pluto_build
     cd pluto_build
-    
-    # cmake -G Ninja -S .. -B build \
-    #     -DCMAKE_C_COMPILER="gcc" -DCMAKE_CXX_COMPILER="g++" \
-    #     -DCMAKE_CXX_STANDARD=14 \  # Force C++14
-    #     -DCMAKE_INSTALL_PREFIX="../llvm_obfuscator_pluto/" \
-    #     -DCMAKE_BUILD_TYPE=Release \
-    #     -DLLVM_TARGETS_TO_BUILD="X86;AArch64;ARM;Mips" \
-    #     -DLLVM_ENABLE_PROJECTS="clang"
-
     cmake -G Ninja -S .. -B build -DCMAKE_C_COMPILER="gcc" -DCMAKE_CXX_COMPILER="g++" -DCMAKE_INSTALL_PREFIX="../llvm_obfuscator_pluto/" -DCMAKE_BUILD_TYPE=Release
     ninja -j2 -C build install
     mkdir -p ../../../llvm_obfuscator_pluto/
-    mv ../llvm_obfuscator_pluto ../../
-    cd ../../
-
-    if [ -f "./llvm_obfuscator_pluto/bin/clang++" ]; then
-        echo "Pluto installed successfully."
-        # rm -r Pluto
-    else
-        echo "Error: Pluto installation failed."
-        # exit 1
-    fi
-
+    mv ./install/* ../../../llvm_obfuscator_pluto/
+    cd ../../../ 
+    rm -r Pluto
 else 
     echo -e "${GREEN}[!] Pluto is already installed.${NC}"
+
 fi
 
-echo "start unit test:"
-./llvm_obfuscator_pluto/bin/clang++ -D nullptr=NULL -O2 -flto -fuse-ld=lld -mllvm -passes=mba,sub,idc,bcf,fla,gle -Xlinker -mllvm -Xlinker -passes=hlw,idc -target x86_64-w64-mingw32 loader2_test.c ./classic_stubs/syscalls.c ./classic_stubs/syscallsstubs.std.x64.s -o ./notepad_llvm.exe -v -L$MINGW_DIR -L./clang_test_include -I./c++/ -I./c++/mingw32/ -lws2_32 -lpsapi
+echo "start Pluto unit test:"
+
+./llvm_obfuscator_pluto/bin/clang++ \
+  -D nullptr=NULL \
+  -O2 -flto -fuse-ld=lld \
+  -mllvm -passes=mba,sub,idc,bcf,fla,gle \
+  -Xlinker -mllvm -Xlinker -passes=hlw,idc \
+  -target x86_64-w64-mingw32 \
+  loader2_test.c ./classic_stubs/syscalls.c ./classic_stubs/syscallsstubs.std.x64.s \
+  -o ./notepad_llvm.exe -v \
+  -L/usr/lib/gcc/x86_64-w64-mingw32/$GCCVER \
+  -L./clang_test_include \
+  -I./c++/ -I./c++/mingw32/ \
+  -lstdc++ -lgcc_s -lgcc \
+  -lws2_32 -lpsapi -lmingw32 -lmoldname -lmingwex -lmsvcrt -ladvapi32 -lshell32 -luser32 -lkernel32
+# ./llvm_obfuscator_pluto/bin/clang++ -D nullptr=NULL -O2 -flto -fuse-ld=lld -mllvm -passes=mba,sub,idc,bcf,fla,gle -Xlinker -mllvm -Xlinker -passes=hlw,idc -target x86_64-w64-mingw32 loader2_test.c ./classic_stubs/syscalls.c ./classic_stubs/syscallsstubs.std.x64.s -o ./notepad_llvm.exe -v -L$MINGW_DIR -L./clang_test_include -I./c++/ -I./c++/mingw32/ -lws2_32 -lpsapi
 # Run Pluto unit test (non-fatal Wine execution)
 if [ -f "./notepad_llvm.exe" ]; then
     wine ./notepad_llvm.exe
@@ -223,6 +241,7 @@ if [ -f "./notepad_llvm.exe" ]; then
 else
     echo -e "${RED}[!] notepad_llvm.exe not found. Skipping Wine test.${NC}"
 fi
+
 
 echo -e "${GREEN}[!] Installation and setup completed! ${NC}"
 
