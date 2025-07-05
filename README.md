@@ -8,7 +8,7 @@
 ![c](https://img.shields.io/badge/C-00599C?style=for-the-badge&logo=c&logoColor=white) ![python](https://img.shields.io/badge/Python-00599C?style=for-the-badge&logo=python&logoColor=red) ![assembly](https://img.shields.io/badge/ASSEMBLY-ED8B00?style=for-the-badge&logo=Assembly&logoColor=white) ![windows](https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)
 
 
-[Features](#Features) | [Installation](#installation) | [Usage](#Usage) | [Evasion Module](#evasion-modules)
+[Features](#Features) | [Installation](#installation) | [Docker Setup & Installation](#Docker Setup & Installation) | [Usage](#Usage) | [Evasion Module](#evasion-modules)
 
 ## Presentation
 
@@ -409,7 +409,7 @@ Boaz evasion wrapped Mimikatz.exe x64 release. The detection rate for wrapped Mi
 
 ## Roadmap
 
-- **Docker**: Make it available with Docker without installation
+- **Spack**: Use Spack to manage packages
 - **Add a GUI for users**: Web UI or Python UI.
 - **Loaders**: Implement more loader templates (process injection and code execution methods) with a divide and conquer option available.
 - **Rust**: Loader should be language agnostic. Rust loader would be a good alternative. 
