@@ -483,8 +483,8 @@ For any queries or contributions, please contact the repository owner.
 
 
 
-![Boaz_logo3](https://github.com/thomasxm/Boaz_beta/assets/44269971/0118a0cf-9cd9-48df-8f20-37a059e4bf6a)
 
+<img width="1024" height="1024" alt="output" src="https://github.com/user-attachments/assets/3ba46a38-c2ba-4465-bec9-d2bc14bdfda7" />
 
 
 
