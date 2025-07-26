@@ -1032,11 +1032,11 @@ def compile_with_syswhisper(loader_path, output_name, syswhisper_option, sleep_f
     if anti_emulation:
         additional_sources.extend(['./evader/anti_emu.c', '-lws2_32', '-lpsapi', '-lole32'])
     if self_deletion:
-        compile_command.append('./evader/self_deletion.c')
+        additional_sources.append('./evader/self_deletion.c')
     if anti_forensic:
-        compile_command.append('./evader/anti_forensic.c')
+        additional_sources.append('./evader/anti_forensic.c')
     if cfg:
-        compile_command.append('./evader/cfg_patch.c')
+        additional_sources.append('./evader/cfg_patch.c')
     if etw:
         additional_sources.append('./evader/etw_pass.c')
     ## TODO: Add support for other encoding types
@@ -1332,8 +1332,8 @@ def main():
     68. New loader in progress.
     69. A fork of L-61, manually set VEH and VCH and clean ups by remove the CrossProcessFlags from TEB->PEB.
     ...
-    73. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS.
-    74. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 entryption and PAGE_NOACCESS. The VirtualProtect is being called within pretext.
+    73. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 encryption and PAGE_NOACCESS.
+    74. VT Pointer threadless process injection, can be invoked with decoy address to any function or triggered by injected application (e.g. explorer). Memory guard available with RC4 encryption and PAGE_NOACCESS. The VirtualProtect is being called within pretext.
 
     75. Dotnet JIT threadless process injection. 
     76. Module List PEB Entrypoint threadless process injection. 
