@@ -2547,7 +2547,7 @@ int main(int argc, char *argv[])
 
 
 
-        // This part has been written into the pretext code, so that the memory guard is on until the last miunte of execution. 
+        // This part has been written into the pretext code, so that the memory guard is on until the last minute of execution.
         if(bUseNoAccess) {
             // // //change the memory protection back to PAGE_EXECUTE_READ:
             //     status = NtProtectVirtualMemory(
