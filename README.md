@@ -372,7 +372,8 @@ options:
 
 ## Process Injection Loaders
 
-![Picture 1](https://github.com/user-attachments/assets/277a53f9-cfaa-4315-88f7-80b0360fee41)
+ 
+<img width="1374" height="392" alt="Process_injection_101 1" src="https://github.com/user-attachments/assets/e76d7a5e-314a-45e1-89e3-a8368ff52bc5" />
 
 
 ## Threadless Code Execution Primitives and Memory Scanner Evasion
