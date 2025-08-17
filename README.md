@@ -112,8 +112,8 @@ This tool has an alternative use: it can function as a packer or obfuscator.
       - PG --> VEH --> VCH (vectored continued handler) stealth guard
       - Virtual table hooking execution guard
   -  **A new code execution and process injection primitive**
-      - Threadless execution primitive 9S (Manual VEH to VCH execution)
-      - Threadless execution primitive 2B (Threadless virtual table pointer spoofing)
+      - Threadless execution primitive 1 (Manual VEH to VCH execution)
+      - Threadless execution primitive 2 (Threadless proxy call stub)
 
 
 ## Prerequisites
@@ -376,12 +376,13 @@ options:
 <img width="1374" height="392" alt="Process_injection_101 1" src="https://github.com/user-attachments/assets/e76d7a5e-314a-45e1-89e3-a8368ff52bc5" />
 
 
-## Threadless Code Execution Primitives and Memory Scanner Evasion
+## New Proxy Syscall Stubs Execution
 
 
-White paper link: Coming soon...
+Slides: 
 
-<img width="400" alt="Sifu" src="https://github.com/user-attachments/assets/935ee41b-02cd-46dc-8d29-2fd67d365b7f">
+
+[DEFCON-33-2.pdf](https://github.com/user-attachments/files/21823689/DEFCON-33-2.pdf)
 
 
 ### x86-64 Calling Convention
