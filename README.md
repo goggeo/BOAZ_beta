@@ -378,12 +378,18 @@ options:
 
 ## New Proxy Syscall Stubs Execution
 
+<img width="1249" height="568" alt="Screenshot 2025-08-17 at 18 24 50" src="https://github.com/user-attachments/assets/de8ee6a8-3a85-4400-97bb-9b496cb59a24" />
+
+
+<img width="1424" height="583" alt="Screenshot 2025-08-17 at 18 24 58" src="https://github.com/user-attachments/assets/9247a336-543a-409d-8b4d-d24e059c789c" />
 
 ### Defcon Slides: 
 
 <img width="1396" height="851" alt="Screenshot 2025-08-17 at 18 22 33" src="https://github.com/user-attachments/assets/83c5db9d-ed29-4b41-a976-45d941b5521f" />
 
-[DEFCON-33-2.pdf](https://github.com/user-attachments/files/21823689/DEFCON-33-2.pdf)
+
+
+**Click to download:** [DEFCON-33-2.pdf](https://github.com/user-attachments/files/21823689/DEFCON-33-2.pdf)
 
 
 ### x86-64 Calling Convention
