@@ -379,8 +379,9 @@ options:
 ## New Proxy Syscall Stubs Execution
 
 
-Slides: 
+### Defcon Slides: 
 
+<img width="1396" height="851" alt="Screenshot 2025-08-17 at 18 22 33" src="https://github.com/user-attachments/assets/83c5db9d-ed29-4b41-a976-45d941b5521f" />
 
 [DEFCON-33-2.pdf](https://github.com/user-attachments/files/21823689/DEFCON-33-2.pdf)
 
